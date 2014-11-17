@@ -35,6 +35,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <algorithm>
 #include <string>
 
 #include <stdint.h>
@@ -810,17 +811,22 @@ int32_t t_client::add_url_file(std::string &a_url_file)
                 if(!l_line.empty())
                 {
                         //NDBG_PRINT("Add url: %s\n", l_line.c_str());
-                        l_status = add_url(l_line);
-                        if(STATUS_OK != l_status)
-                        {
-                                NDBG_PRINT("Error performing addurl for url: %s\n", l_line.c_str());
 
-                                if(l_file_line)
+                        l_line.erase( std::remove_if( l_line.begin(), l_line.end(), ::isspace ), l_line.end() );
+                        if(!l_line.empty())
+                        {
+                                l_status = add_url(l_line);
+                                if(STATUS_OK != l_status)
                                 {
-                                        free(l_file_line);
-                                        l_file_line = NULL;
+                                        NDBG_PRINT("Error performing addurl for url: %s\n", l_line.c_str());
+
+                                        if(l_file_line)
+                                        {
+                                                free(l_file_line);
+                                                l_file_line = NULL;
+                                        }
+                                        return STATUS_ERROR;
                                 }
-                                return STATUS_ERROR;
                         }
                 }
 
