@@ -557,13 +557,16 @@ int32_t t_client::create_request(nconn &ao_conn,
                         i_header != m_header_map.end();
                         ++i_header)
         {
-                //printf("Adding HEADER: %s: %s\n", i_header->first.c_str(), i_header->second.c_str());
-                l_req_buf_len += snprintf(l_req_buf + l_req_buf_len, l_max_buf_len - l_req_buf_len,
-                                "%s: %s\r\n", i_header->first.c_str(), i_header->second.c_str());
-
-                if (strcasecmp(i_header->first.c_str(), "host") == 0)
+                if(!i_header->first.empty() && !i_header->second.empty())
                 {
-                        l_specd_host = true;
+                        //printf("Adding HEADER: %s: %s\n", i_header->first.c_str(), i_header->second.c_str());
+                        l_req_buf_len += snprintf(l_req_buf + l_req_buf_len, l_max_buf_len - l_req_buf_len,
+                                        "%s: %s\r\n", i_header->first.c_str(), i_header->second.c_str());
+
+                        if (strcasecmp(i_header->first.c_str(), "host") == 0)
+                        {
+                                l_specd_host = true;
+                        }
                 }
         }
 
