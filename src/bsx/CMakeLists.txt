@@ -44,7 +44,7 @@ SET(SRCS
   main.cc
   t_client.cc
   bsx.cc
-  reqlet_repo.cc
+  cmdlet.cc
 )
 
 # Headers
@@ -85,12 +85,12 @@ add_executable(bsx_cmd ${HDRS} ${SRCS})
 SET_TARGET_PROPERTIES(bsx_cmd PROPERTIES OUTPUT_NAME "bsx")
 target_link_libraries(bsx_cmd
 pthread
-microhttpd
 rt
 ${CMAKE_BINARY_DIR}/src/core/libhlxcore.a
 rt
 crypto
 ssl
+ssh2
 snappy
 leveldb
 tcmalloc

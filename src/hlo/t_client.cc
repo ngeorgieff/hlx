@@ -197,10 +197,13 @@ void t_client::stop(void)
 {
         m_stopped = true;
         int32_t l_status;
-        l_status = m_evr_loop->stop();
-        if(l_status != STATUS_OK)
+        if(m_evr_loop)
         {
-                NDBG_PRINT("Error performing stop.\n");
+                l_status = m_evr_loop->stop();
+                if(l_status != STATUS_OK)
+                {
+                        NDBG_PRINT("Error performing stop.\n");
+                }
         }
 }
 
@@ -250,6 +253,7 @@ void *t_client::evr_loop_file_writeable_cb(void *a_data)
 //: ----------------------------------------------------------------------------
 void *t_client::evr_loop_file_readable_cb(void *a_data)
 {
+        //NDBG_PRINT("%sREADABLE%s\n", ANSI_COLOR_BG_GREEN, ANSI_COLOR_OFF);
 
         if(!a_data)
         {
@@ -302,10 +306,9 @@ void *t_client::evr_loop_file_readable_cb(void *a_data)
                 bool l_can_reuse = false;
                 l_can_reuse = (l_nconn->can_reuse() && l_t_client->reqlet_give_and_can_reuse_conn(l_reqlet));
 
-                //NDBG_PRINT("CONN[%d--%d] %sREUSE%s: %d\n",
-                //              l_active_connection->m_connection_id,
-                //              l_active_connection->m_fd,
-                //              ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF,
+                //NDBG_PRINT("CONN[%d] %sREUSE%s: %d\n",
+                //              l_nconn->m_fd,
+                //              ANSI_COLOR_BG_RED, ANSI_COLOR_OFF,
                 //              l_can_reuse
                 //              );
 
@@ -319,10 +322,10 @@ void *t_client::evr_loop_file_readable_cb(void *a_data)
                 // You complete me...
                 else
                 {
-                        //NDBG_PRINT("DONE: l_reqlet: %sHOST%s: %s --%d / %d\n",
-                        //              ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF, l_active_connection->m_reqlet_ref->m_url.m_host.c_str(),
+                        //NDBG_PRINT("DONE: l_reqlet: %sHOST%s: %d / %d\n",
+                        //              ANSI_COLOR_BG_RED, ANSI_COLOR_OFF,
                         //              l_can_reuse,
-                        //              l_active_connection->can_reuse());
+                        //              l_nconn->can_reuse());
 
                         l_t_client->cleanup_connection(l_nconn, false);
                         return NULL;
@@ -364,8 +367,7 @@ void *t_client::evr_loop_file_timeout_cb(void *a_data)
         t_client *l_t_client = g_t_client;
         uint64_t l_connection_id = l_nconn->get_id();
 
-        //printf("%sT_O%s: %p\n",ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF,
-        //		l_rconn->m_timer_obj);
+        //printf("%sT_O%s: %p\n",ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF, l_nconn);
 
         // Add stats
         add_stat_to_agg(l_reqlet->m_stat_agg, l_nconn->get_stats());
@@ -475,10 +477,17 @@ void *t_client::t_run(void *a_nothing)
                 // Start Connections
                 // -------------------------------------------
                 //NDBG_PRINT("%sSTART_CONNECTIONS%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
-                start_connections();
+                l_status = start_connections();
+                if(l_status != STATUS_OK)
+                {
+                        NDBG_PRINT("%sSTART_CONNECTIONS%s ERROR!\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+                        return NULL;
+                }
 
                 // Run loop
+                //NDBG_PRINT("%sRUN%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
                 m_evr_loop->run();
+                //NDBG_PRINT("%sDONE%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
 
         }
 
@@ -514,7 +523,7 @@ int32_t t_client::start_connections(void)
                         {
                                 NDBG_PRINT("Bailing out out.  Reason no reqlets available\n");
                         }
-                        return m_num_fetched;
+                        return STATUS_OK;
 
                 }
 
@@ -537,52 +546,26 @@ int32_t t_client::start_connections(void)
                 // Create request
                 create_request(*l_nconn, *l_reqlet);
 
-                //NDBG_PRINT("%sCONNECT%s: %s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF, l_reqlet->m_url.m_host.c_str());
-                l_status = l_nconn->do_connect(l_reqlet->m_host_info, l_reqlet->m_url.m_host);
-
                 m_conn_used_set.insert(*i_conn);
                 m_conn_free_list.erase(i_conn++);
 
                 // TODO Make configurable
                 m_evr_loop->add_timer(m_timeout_s*1000, evr_loop_file_timeout_cb, l_nconn, &(l_nconn->m_timer_obj));
 
-                conn_state_t l_nconn_state = l_nconn->get_state();
-                if((STATUS_OK != l_status) &&
-                                (l_nconn_state != CONN_STATE_CONNECTING))
+                //NDBG_PRINT("%sCONNECT%s: %s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF, l_reqlet->m_url.m_host.c_str());
+                l_nconn->set_host(l_reqlet->m_url.m_host);
+                l_status = l_nconn->run_state_machine(m_evr_loop, l_reqlet->m_host_info);
+                if((l_status != STATUS_OK) &&
+                                (l_nconn->get_state() != CONN_STATE_CONNECTING))
                 {
-                        NDBG_PRINT("Error: Performing do_connect: connection_state: %d status: %d\n", l_nconn_state, l_status);
-                        cleanup_connection(l_nconn);
-                        return STATUS_ERROR;
-                }
-
-                if (0 != m_evr_loop->add_fd(l_nconn->get_fd(),
-                                EVR_FILE_ATTR_MASK_WRITE|EVR_FILE_ATTR_MASK_STATUS_ERROR,
-                                l_nconn))
-                {
-                        NDBG_PRINT("Error: Couldn't add socket file descriptor\n");
+                        NDBG_PRINT("Error: Performing do_connect: connection_state: %d status: %d\n", l_nconn->get_state(), l_status);
                         cleanup_connection(l_nconn);
                         continue;
                 }
 
-                // -------------------------------------------
-                // Add to event handler
-                // -------------------------------------------
-                if(l_nconn->get_state() != CONN_STATE_CONNECTING)
-                {
-                        if (0 != m_evr_loop->mod_fd(
-                                        l_nconn->get_fd(),
-                                        EVR_FILE_ATTR_MASK_WRITE|EVR_FILE_ATTR_MASK_READ|EVR_FILE_ATTR_MASK_STATUS_ERROR,
-                                        l_nconn))
-                        {
-                                NDBG_PRINT("Error: Couldn't add socket file descriptor\n");
-                                cleanup_connection(l_nconn);
-                                continue;
-                        }
-                }
-
         }
 
-        return m_num_fetched;
+        return STATUS_OK;
 
 }
 

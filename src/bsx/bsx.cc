@@ -27,10 +27,11 @@
 #include "ndebug.h"
 #include "bsx.h"
 #include "t_client.h"
-#include "reqlet_repo.h"
-#include "reqlet.h"
+#include "cmdlet.h"
 
 //#include "util.h"
+
+#include <libssh2.h>
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
@@ -40,7 +41,7 @@
 int32_t bsx::run(host_list_t &a_host_list)
 {
         int32_t l_retval = STATUS_OK;
-        reqlet_repo *l_reqlet_repo = NULL;
+        cmdlet_repo *l_cmdlet_repo = NULL;
 
         // Check is initialized
         if(!m_is_initd)
@@ -54,25 +55,18 @@ int32_t bsx::run(host_list_t &a_host_list)
         }
 
         // Create the reqlet list
-        l_reqlet_repo = reqlet_repo::get();
-        uint32_t l_reqlet_num = 0;
+        l_cmdlet_repo = cmdlet_repo::get();
+        uint32_t l_cmdlet_num = 0;
         for(host_list_t::iterator i_host = a_host_list.begin();
                         i_host != a_host_list.end();
-                        ++i_host, ++l_reqlet_num)
+                        ++i_host, ++l_cmdlet_num)
         {
                 // Create a re
-                reqlet *l_reqlet = new reqlet(l_reqlet_num, 1);
-
+                cmdlet *l_cmdlet = new cmdlet(l_cmdlet_num, *i_host, m_exec_line);
                 // TODO Make port configurable
-                l_reqlet->init_with_url("http://bloop:22");
-
-                // TODO Add exec line to reqlet
-
-                // override host
-                l_reqlet->set_host(*i_host);
 
                 // Add to list
-                l_reqlet_repo->add_reqlet(l_reqlet);
+                l_cmdlet_repo->add_cmdlet(l_cmdlet);
 
         }
 
@@ -89,18 +83,28 @@ int32_t bsx::run(host_list_t &a_host_list)
 
                 // Construct with settings...
                 t_client *l_t_client = new t_client(
-                                m_verbose,
-                                m_color,
-                                m_sock_opt_recv_buf_size,
-                                m_sock_opt_send_buf_size,
-                                m_sock_opt_no_delay,
-                                m_timeout_s,
-                                m_evr_loop_type,
-                                m_start_parallel
+                        m_verbose,
+                        m_color,
+                        m_sock_opt_recv_buf_size,
+                        m_sock_opt_send_buf_size,
+                        m_sock_opt_no_delay,
+                        m_timeout_s,
+                        m_evr_loop_type,
+                        m_start_parallel,
+                        m_user,
+                        m_password,
+                        m_public_key_file,
+                        m_private_key_file
                 );
 
                 m_t_client_list.push_back(l_t_client);
         }
+
+        // Wipe
+        //m_user.clear();
+        //m_password.clear();
+        //m_public_key.clear();
+        //m_private_key_file.clear();
 
         // -------------------------------------------
         // Run...
@@ -204,6 +208,14 @@ int32_t bsx::init(void)
         // -------------------------------------------
         //t_async_resolver::get()->run();
 
+        int l_libssh2_init_status;
+        l_libssh2_init_status = libssh2_init(0);
+        if (l_libssh2_init_status != 0)
+        {
+                printf("Error libssh2 initialization failed (%d)\n", l_libssh2_init_status);
+                return STATUS_ERROR;
+        }
+
         m_is_initd = true;
         return STATUS_OK;
 
@@ -227,7 +239,11 @@ bsx::bsx(void):
         m_start_parallel(1),
         m_num_threads(1),
         m_exec_line(),
-        m_timeout_s(BSX_DEFAULT_CONN_TIMEOUT_S)
+        m_timeout_s(BSX_DEFAULT_CONN_TIMEOUT_S),
+        m_user(),
+        m_password(),
+        m_public_key_file(),
+        m_private_key_file()
 {
 
 }
@@ -251,6 +267,10 @@ bsx::~bsx()
                 m_t_client_list.erase(i_client_bsx++);
 
         }
+
+        // libssh cleanup
+        libssh2_exit();
+
 
         // SSL Cleanup
         //nconn_kill_locks();

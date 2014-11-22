@@ -94,6 +94,7 @@ ${CMAKE_BINARY_DIR}/src/core/libhlxcore.a
 rt
 crypto
 ssl
+ssh2
 snappy
 leveldb
 tcmalloc

@@ -31,7 +31,7 @@
 #include "evr.h"
 #include "nconn.h"
 #include "parsed_url.h"
-#include "reqlet.h"
+#include "cmdlet.h"
 #include "ndebug.h"
 #include "util.h"
 
@@ -100,7 +100,11 @@ public:
                 bool a_sock_opt_no_delay,
                 uint32_t a_timeout_s,
                 evr_loop_type_t a_evr_loop_type,
-                uint32_t a_max_parallel_connections
+                uint32_t a_max_parallel_connections,
+                const std::string &a_user,
+                const std::string &a_password,
+                const std::string &a_public_key_file,
+                const std::string &a_private_key_file
                 );
 
         ~t_client();
@@ -141,7 +145,7 @@ private:
 
         int32_t start_connections(void);
         int32_t cleanup_connection(nconn *a_nconn, bool a_cancel_timer = true);
-        int32_t create_request(nconn &ao_conn, reqlet &a_reqlet);
+        int32_t create_cmd(nconn &ao_conn, const cmdlet &a_cmdlet);
 
         // -------------------------------------------------
         // Private members
@@ -167,11 +171,17 @@ private:
         conn_id_list_t m_conn_free_list;
         conn_id_set_t m_conn_used_set;
 
-        int64_t m_num_fetches;
-        int64_t m_num_fetched;
-        int64_t m_num_pending;
+        int64_t m_num_cmds;
+        int64_t m_num_cmds_completed;
+        int64_t m_num_cmds_pending;
 
         evr_loop *m_evr_loop;
+
+        // Authentication
+        std::string m_user;
+        std::string m_password;
+        std::string m_public_key_file;
+        std::string m_private_key_file;
 
 };
 

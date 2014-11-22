@@ -97,6 +97,10 @@ public:
         void set_start_parallel(int32_t a_val) {m_start_parallel = a_val;}
         void set_num_threads(uint32_t a_val) {m_num_threads = a_val;}
         void set_timeout_s(int32_t a_val) {m_timeout_s = a_val;}
+        void set_user(const std::string &a_user) {m_user = a_user;}
+        void set_password(const std::string &a_password) {m_password = a_password;}
+        void set_public_key_file(const std::string &a_public_key_file) {m_public_key_file = a_public_key_file;}
+        void set_private_key_file(const std::string &a_private_key_file) {m_private_key_file = a_private_key_file;}
 
         // Running...
         int32_t run(host_list_t &a_host_list);
@@ -142,6 +146,12 @@ private:
         uint32_t m_num_threads;
         std::string m_exec_line;
         uint32_t m_timeout_s;
+
+        // Authentication
+        std::string m_user;
+        std::string m_password;
+        std::string m_public_key_file;
+        std::string m_private_key_file;
 
         // -------------------------------------------------
         // Class members

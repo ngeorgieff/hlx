@@ -26,7 +26,7 @@
 //: ----------------------------------------------------------------------------
 #include "bsx.h"
 #include "util.h"
-#include "reqlet_repo.h"
+#include "cmdlet.h"
 #include "ndebug.h"
 #include "resolver.h"
 
@@ -179,6 +179,12 @@ void print_usage(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "  -X, --exec           Execute line -REQUIRED.\n");
         fprintf(a_stream, "  \n");
 
+        fprintf(a_stream, "Authentication Options\n");
+        fprintf(a_stream, "  -i, --identity       Private key.\n");
+        fprintf(a_stream, "                       Note will generate .pub version in /tmp if no <identity>.pub found.\n");
+        fprintf(a_stream, "  -u, --user           User -will prompt for password if no key provided.\n");
+        fprintf(a_stream, "  \n");
+
         fprintf(a_stream, "Hostname Input Options -also STDIN:\n");
         fprintf(a_stream, "  -f, --host_file      Host name file.\n");
         fprintf(a_stream, "  -x, --execute        Script to execute to get host names.\n");
@@ -201,11 +207,8 @@ void print_usage(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "  -s, --show_progress  Show progress\n");
         fprintf(a_stream, "  \n");
 
-        fprintf(a_stream, "Output Options: -defaults to line delimited\n");
-        fprintf(a_stream, "  -l, --line_delimited Output <HOST> <RESPONSE BODY> per line\n");
-        fprintf(a_stream, "  -j, --json           JSON { <HOST>: \"body\": <RESPONSE> ...\n");
-        fprintf(a_stream, "  -P, --pretty         Pretty output\n");
-        fprintf(a_stream, "  \n");
+        //fprintf(a_stream, "Output Options: -defaults to line delimited\n");
+        //fprintf(a_stream, "  \n");
 
         fprintf(a_stream, "Debug Options:\n");
         fprintf(a_stream, "  -G, --gprofile       Google profiler output file\n");
@@ -241,6 +244,8 @@ int main(int argc, char** argv)
                 { "help",           0, 0, 'h' },
                 { "version",        0, 0, 'v' },
                 { "exec",           1, 0, 'X' },
+                { "identity",       1, 0, 'i' },
+                { "user",           1, 0, 'u' },
                 { "host_file",      1, 0, 'f' },
                 { "execute",        1, 0, 'x' },
                 { "parallel",       1, 0, 'p' },
@@ -254,9 +259,6 @@ int main(int argc, char** argv)
                 { "color",          0, 0, 'c' },
                 { "quiet",          0, 0, 'q' },
                 { "show_progress",  0, 0, 's' },
-                { "line_delimited", 0, 0, 'l' },
-                { "json",           0, 0, 'j' },
-                { "pretty",         0, 0, 'P' },
                 { "gprofile",       1, 0, 'G' },
 
                 // list sentinel
@@ -271,15 +273,13 @@ int main(int argc, char** argv)
         std::string l_host_file_str;
         std::string l_exec_line;
         std::string l_ai_cache;
-
-        // Defaults
-        reqlet_repo::output_type_t l_output_mode = reqlet_repo::OUTPUT_JSON;
-        bool l_output_pretty = false;
+        std::string l_identity_file;
+        std::string l_username;
 
         // -------------------------------------------------
         // Args...
         // -------------------------------------------------
-        char l_short_arg_list[] = "hvX:f:x:p:t:T:R:S:DA:rcqsljPG:";
+        char l_short_arg_list[] = "hvX:i:u:f:x:p:t:T:R:S:DA:rcqsG:";
         while ((l_opt = getopt_long_only(argc, argv, l_short_arg_list, l_long_options, &l_option_index)) != -1)
         {
 
@@ -319,6 +319,23 @@ int main(int argc, char** argv)
                         break;
                 }
 
+                // ---------------------------------------
+                // Identity line
+                // ---------------------------------------
+                case 'i':
+                {
+                        l_identity_file = l_argument;
+                        break;
+                }
+
+                // ---------------------------------------
+                // username
+                // ---------------------------------------
+                case 'u':
+                {
+                        l_username = l_argument;
+                        break;
+                }
                 // ---------------------------------------
                 // Host file
                 // ---------------------------------------
@@ -472,33 +489,6 @@ int main(int argc, char** argv)
                 }
 
                 // ---------------------------------------
-                // line delimited
-                // ---------------------------------------
-                case 'l':
-                {
-                        l_output_mode = reqlet_repo::OUTPUT_LINE_DELIMITED;
-                        break;
-                }
-
-                // ---------------------------------------
-                // json output
-                // ---------------------------------------
-                case 'j':
-                {
-                        l_output_mode = reqlet_repo::OUTPUT_JSON;
-                        break;
-                }
-
-                // ---------------------------------------
-                // pretty output
-                // ---------------------------------------
-                case 'P':
-                {
-                        l_output_pretty = true;
-                        break;
-                }
-
-                // ---------------------------------------
                 // Google Profiler Output File
                 // ---------------------------------------
                 case 'G':
@@ -536,7 +526,6 @@ int main(int argc, char** argv)
         }
         // else set url
         l_bsx->set_exec_line(l_exec_line);
-
 
         host_list_t l_host_list;
         // -------------------------------------------------
@@ -621,17 +610,25 @@ int main(int argc, char** argv)
                 //}
         }
 
+        // -------------------------------------------------
+        // Authentication processing
+        // -------------------------------------------------
+        // TODO CRAP!!!
+        l_bsx->set_user(std::string(""));
+        l_bsx->set_password(std::string(""));
+        l_bsx->set_public_key_file(std::string(""));
+        l_bsx->set_private_key_file(std::string(""));
+
         // -------------------------------------------
         // Sigint handler
         // -------------------------------------------
         if (signal(SIGINT, sig_handler) == SIG_ERR)
         {
                 printf("Error: can't catch SIGINT\n");
-                return -1;
+                return STATUS_ERROR;
         }
         // TODO???
         //signal(SIGPIPE, SIG_IGN);
-
 
         // -------------------------------------------
         // Init resolver with cache
@@ -640,7 +637,7 @@ int main(int argc, char** argv)
         l_ldb_init_status = resolver::get()->init(l_ai_cache, true);
         if(STATUS_OK != l_ldb_init_status)
         {
-                return -1;
+                return STATUS_ERROR;
         }
 
         // Start Profiler
@@ -655,7 +652,7 @@ int main(int argc, char** argv)
         if(0 != l_run_status)
         {
                 printf("Error: performing bsx::run");
-                return -1;
+                return STATUS_ERROR;
         }
 
         //uint64_t l_start_time_ms = get_time_ms();
@@ -687,7 +684,7 @@ int main(int argc, char** argv)
         // -------------------------------------------
         if(!g_cancelled)
         {
-                reqlet_repo::get()->dump_all_responses(l_settings.m_color, l_output_pretty, l_output_mode);
+                cmdlet_repo::get()->dump_all_results();
         }
 
         // -------------------------------------------
@@ -765,7 +762,7 @@ void command_exec(thread_args_struct_t &a_thread_args)
 
         nonblock(NB_ENABLE);
 
-        reqlet_repo *l_reqlet_repo = reqlet_repo::get();
+        cmdlet_repo *l_cmdlet_repo = cmdlet_repo::get();
 
         //: ------------------------------------
         //:   Loop forever until user quits
@@ -804,7 +801,7 @@ void command_exec(thread_args_struct_t &a_thread_args)
 
                 if(a_thread_args.m_settings.m_show_stats)
                 {
-                        l_reqlet_repo->display_status_line(a_thread_args.m_settings.m_color);
+                        l_cmdlet_repo->display_status_line(a_thread_args.m_settings.m_color);
                 }
 
                 if (!l_bsx->is_running())
