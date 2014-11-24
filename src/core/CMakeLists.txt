@@ -46,7 +46,6 @@ SET(SRCS
     ./support/util.cc
     ./support/parsed_url.cc
     ./support/reqlet.cc
-    ./support/cmdlet.cc
     ./support/nconn.cc
     ./support/resolver.cc
 )

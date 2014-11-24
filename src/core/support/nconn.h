@@ -35,9 +35,6 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-// ssh2
-#include <libssh2.h>
-
 #include <pthread.h>
 
 
@@ -72,8 +69,7 @@ public:
         typedef enum scheme_enum {
 
                 SCHEME_HTTP = 0,
-                SCHEME_HTTPS,
-                SCHEME_SSH,
+                SCHEME_HTTPS
 
         } scheme_t;
 
@@ -90,26 +86,10 @@ public:
                 CONN_STATE_SSL_CONNECTING_WANT_READ,
                 CONN_STATE_SSL_CONNECTING_WANT_WRITE,
 
-                // SSH
-                CONN_STATE_SSH_CONNECTING,
-
                 CONN_STATE_CONNECTED,
                 CONN_STATE_READING,
                 CONN_STATE_DONE
         } conn_state_t;
-
-        // ---------------------------------------
-        // SSH State
-        // ---------------------------------------
-        typedef enum ssh2_conn_state
-        {
-                SSH2_CONN_STATE_NONE = 0,
-                SSH2_CONN_STATE_HANDSHAKE,
-                SSH2_CONN_STATE_VALIDATION,
-                SSH2_CONN_STATE_AUTHENTICATION,
-                SSH2_CONN_STATE_OPEN_SESSION,
-                SSH2_CONN_STATE_CONNECTED
-        } ssh2_conn_state_t;
 
         nconn(bool a_verbose,
               bool a_color,
@@ -128,15 +108,6 @@ public:
                 // ssl
                 m_ssl_ctx(NULL),
                 m_ssl(NULL),
-
-                // ssh2
-                m_ssh2_session(NULL),
-                m_ssh2_channel(NULL),
-                m_ssh2_state(SSH2_CONN_STATE_NONE),
-                m_ssh2_user(),
-                m_ssh2_password(),
-                m_ssh2_public_key_file(),
-                m_ssh2_private_key_file(),
 
                 m_state(CONN_STATE_FREE),
                 m_stat(),
@@ -227,14 +198,6 @@ public:
         void *get_data1(void) {return m_data1;}
 
         // -------------------------------------------------
-        // SSH2 setters
-        // -------------------------------------------------
-        void set_ssh2_user(const std::string &a_user) {m_ssh2_user = a_user;}
-        void set_ssh2_password(const std::string &a_password) {m_ssh2_password = a_password;}
-        void set_ssh2_public_key_file(const std::string &a_public_key_file) {m_ssh2_public_key_file = a_public_key_file;}
-        void set_ssh2_private_key_file(const std::string &a_private_key_file) {m_ssh2_private_key_file = a_private_key_file;}
-
-        // -------------------------------------------------
         // Public static methods
         // -------------------------------------------------
         static int hp_on_message_begin(http_parser* a_parser);
@@ -263,7 +226,6 @@ private:
 
         int32_t setup_socket(const host_info_t &a_host_info);
         int32_t ssl_connect_cb(const host_info_t &a_host_info);
-        int32_t ssh_connect_cb(const host_info_t &a_host_info);
 
         // -------------------------------------------------
         // Private members
@@ -272,23 +234,12 @@ private:
         SSL_CTX * m_ssl_ctx;
         SSL *m_ssl;
 
-        // ssh2
-        LIBSSH2_SESSION *m_ssh2_session;
-        LIBSSH2_CHANNEL *m_ssh2_channel;
-        ssh2_conn_state_t m_ssh2_state;
-
-        std::string m_ssh2_user;
-        std::string m_ssh2_password;
-        std::string m_ssh2_public_key_file;
-        std::string m_ssh2_private_key_file;
-
         conn_state_t m_state;
         req_stat_t m_stat;
         uint64_t m_id;
         void *m_data1;
         bool m_save_response_in_reqlet;
 
-        // TODO Testing...
         http_parser_settings m_http_parser_settings;
         http_parser m_http_parser;
         bool m_server_response_supports_keep_alives;

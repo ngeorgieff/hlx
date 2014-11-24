@@ -27,7 +27,6 @@ cmake_minimum_required(VERSION 2.8.0)
 add_subdirectory(core)
 add_subdirectory(hlo)
 add_subdirectory(hle)
-add_subdirectory(bsx)
 
 # TODO Clean up
 #add_subdirectory(hlp)
