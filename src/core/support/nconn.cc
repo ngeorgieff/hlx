@@ -1147,7 +1147,7 @@ int32_t nconn::done_cb(void)
                 m_ssh2_state = SSH2_CONN_STATE_NONE;
         }
 
-        NDBG_PRINT("CLOSE[%lu--%d] %s--CONN--%s\n", m_id, m_fd, ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+        //NDBG_PRINT("CLOSE[%lu--%d] %s--CONN--%s\n", m_id, m_fd, ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
         close(m_fd);
         m_fd = -1;
 
