@@ -31,6 +31,12 @@
 
 //#include "util.h"
 
+
+//#include <gnutls.h>
+#include <gcrypt.h>
+#include <errno.h>
+#include <pthread.h>
+GCRY_THREAD_OPTION_PTHREAD_IMPL;
 #include <libssh2.h>
 
 //: ----------------------------------------------------------------------------
@@ -210,6 +216,7 @@ int32_t bsx::init(void)
 
         // Set up Crypto locking...
         //nconn_ssl_init(std::string());
+        gcry_control (GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
 
         int l_libssh2_init_status;
         l_libssh2_init_status = libssh2_init(0);

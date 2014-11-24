@@ -90,6 +90,7 @@ rt
 crypto
 ssl
 ssh2
+gcrypt
 snappy
 leveldb
 tcmalloc

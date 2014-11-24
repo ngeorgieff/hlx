@@ -114,6 +114,7 @@ static int ssh2_waitsocket(int a_socket_fd, LIBSSH2_SESSION *a_session)
         FD_ZERO(&l_fd);
         FD_SET(a_socket_fd, &l_fd);
 
+        usleep(1000);
         // now make sure we wait in the correct direction
         l_dir = libssh2_session_block_directions(a_session);
         if (l_dir & LIBSSH2_SESSION_BLOCK_INBOUND)  l_readfd  = &l_fd;
@@ -1117,8 +1118,9 @@ int32_t nconn::done_cb(void)
                 int32_t l_rc;
                 while ((l_rc = libssh2_channel_close(m_ssh2_channel)) == LIBSSH2_ERROR_EAGAIN)
                 {
-                        // TODO Can we just spin here? -sans wait socket
-                        ssh2_waitsocket(m_fd, m_ssh2_session);
+                        //NDBG_PRINT("libssh2_channel_close\n");
+                        // TODO Can we just spin here?
+                        usleep(1000);
                 }
 
                 //int32_t l_exitcode = 127;
@@ -1145,7 +1147,7 @@ int32_t nconn::done_cb(void)
                 m_ssh2_state = SSH2_CONN_STATE_NONE;
         }
 
-        //NDBG_PRINT("CLOSE[%lu--%d] %s--CONN--%s\n", m_id, m_fd, ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+        NDBG_PRINT("CLOSE[%lu--%d] %s--CONN--%s\n", m_id, m_fd, ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
         close(m_fd);
         m_fd = -1;
 
