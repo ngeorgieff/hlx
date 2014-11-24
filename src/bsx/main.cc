@@ -684,7 +684,7 @@ int main(int argc, char** argv)
         // -------------------------------------------
         if(!g_cancelled)
         {
-                cmdlet_repo::get()->dump_all_results();
+                cmdlet_repo::get()->dump_all_results(l_settings.m_color);
         }
 
         // -------------------------------------------

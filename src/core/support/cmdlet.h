@@ -148,7 +148,7 @@ public:
         void up_done(bool a_error) { ++m_num_done; if(a_error)++m_num_error;};
         void up_resolved(bool a_error) {if(a_error)++m_num_error; else ++m_num_resolved;};
         void display_status_line(bool a_color);
-        void dump_all_results(void);
+        void dump_all_results(bool a_color);
         cmdlet *try_get_resolved(void);
 
 private:

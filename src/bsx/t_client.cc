@@ -249,26 +249,26 @@ void *t_client::evr_loop_file_writeable_cb(void *a_data)
                 return NULL;
         }
 
-#if 0
         nconn* l_nconn = static_cast<nconn*>(a_data);
-        reqlet *l_reqlet = static_cast<reqlet *>(l_nconn->get_data1());
+        cmdlet *l_cmdlet = static_cast<cmdlet *>(l_nconn->get_data1());
         t_client *l_t_client = g_t_client;
+
+        //NDBG_PRINT("%sWRITEABLE%s[%d] %p\n", ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF, l_nconn->m_fd, l_nconn);
 
         // Cancel last timer
         l_t_client->m_evr_loop->cancel_timer(&(l_nconn->m_timer_obj));
 
         int32_t l_status = STATUS_OK;
-        l_status = l_nconn->run_state_machine(l_t_client->m_evr_loop, l_reqlet->m_host_info);
+        l_status = l_nconn->run_state_machine(l_t_client->m_evr_loop, l_cmdlet->m_host_info);
         if(STATUS_ERROR == l_status)
         {
                 NDBG_PRINT("Error: performing run_state_machine\n");
-                T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_reqlet, 500, "Error performing connect_cb");
+                T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_cmdlet, 500, "Error performing connect_cb");
                 return NULL;
         }
 
         // Add idle timeout
         l_t_client->m_evr_loop->add_timer( l_t_client->get_timeout_s()*1000, evr_loop_file_timeout_cb, l_nconn, &(l_nconn->m_timer_obj));
-#endif
 
         return NULL;
 
@@ -287,9 +287,8 @@ void *t_client::evr_loop_file_readable_cb(void *a_data)
                 return NULL;
         }
 
-#if 0
         nconn* l_nconn = static_cast<nconn*>(a_data);
-        reqlet *l_reqlet = static_cast<reqlet *>(l_nconn->get_data1());
+        cmdlet *l_cmdlet = static_cast<cmdlet *>(l_nconn->get_data1());
         t_client *l_t_client = g_t_client;
 
         //NDBG_PRINT("%sREADABLE%s[%d] %p\n", ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF, l_nconn->m_fd, l_nconn);
@@ -298,37 +297,31 @@ void *t_client::evr_loop_file_readable_cb(void *a_data)
         l_t_client->m_evr_loop->cancel_timer(&(l_nconn->m_timer_obj));
 
         int32_t l_status = STATUS_OK;
-        l_status = l_nconn->run_state_machine(l_t_client->m_evr_loop, l_reqlet->m_host_info);
+        l_status = l_nconn->run_state_machine(l_t_client->m_evr_loop, l_cmdlet->m_host_info);
         if(STATUS_ERROR == l_status)
         {
                 NDBG_PRINT("Error: performing run_state_machine\n");
-                T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_reqlet, 500, "Error performing connect_cb");
+                T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_cmdlet, 500, "Error performing connect_cb");
                 return NULL;
         }
 
-        if(l_status >= 0)
-        {
-                l_reqlet->m_stat_agg.m_num_bytes_read += l_status;
-        }
+        //if(l_status >= 0)
+        //{
+        //        l_cmdlet->m_stat_agg.m_num_bytes_read += l_status;
+        //}
 
         // Check for done...
-        if((l_nconn->get_state() == CONN_STATE_DONE) ||
+        // TODO REMOVE
+        //NDBG_PRINT("%sREADABLE%s[%d] %p STATE: %d\n", ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF, l_nconn->m_fd, l_nconn, l_nconn->get_state());
+        if((l_nconn->get_state() == nconn::CONN_STATE_DONE) ||
                         (l_status == STATUS_ERROR))
         {
-                if(l_status == STATUS_ERROR)
-                {
-                        T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_reqlet, 500, "Unknown error");
-                }
-                else
-                {
-                        T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_reqlet, 0, "");
-                }
+                T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_cmdlet, l_status, "");
                 return NULL;
         }
 
         // Add idle timeout
         l_t_client->m_evr_loop->add_timer( l_t_client->get_timeout_s()*1000, evr_loop_file_timeout_cb, l_nconn, &(l_nconn->m_timer_obj));
-#endif
 
         return NULL;
 }
@@ -369,29 +362,27 @@ void *t_client::evr_loop_file_timeout_cb(void *a_data)
                 return NULL;
         }
 
-#if 0
         nconn* l_nconn = static_cast<nconn*>(a_data);
-        reqlet *l_reqlet = static_cast<reqlet *>(l_nconn->get_data1());
+        cmdlet *l_cmdlet = static_cast<cmdlet *>(l_nconn->get_data1());
         t_client *l_t_client = g_t_client;
 
         //printf("%sT_O%s: %p\n",ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF,
         //		l_rconn->m_timer_obj);
 
         // Add stats
-        //add_stat_to_agg(l_reqlet->m_stat_agg, l_nconn->get_stats());
+        //add_stat_to_agg(l_cmdlet->m_stat_agg, l_nconn->get_stats());
         if(l_t_client->m_verbose)
         {
                 NDBG_PRINT("%sTIMING OUT CONN%s: i_conn: %lu HOST: %s LAST_STATE: %d THIS: %p\n",
                                 ANSI_COLOR_BG_RED, ANSI_COLOR_OFF,
                                 l_nconn->get_id(),
-                                l_reqlet->m_url.m_host.c_str(),
+                                l_cmdlet->m_host.c_str(),
                                 l_nconn->get_state(),
                                 l_t_client);
         }
 
         // Cleanup
-        T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_reqlet, 502, "Connection timed out");
-#endif
+        T_CLIENT_CONN_CLEANUP(l_t_client, l_nconn, l_cmdlet, 502, "Connection timed out");
 
         return NULL;
 }
@@ -438,10 +429,16 @@ void *t_client::t_run(void *a_nothing)
                 // -------------------------------------------
                 // Start Connections
                 // -------------------------------------------
-                NDBG_PRINT("%sSTART_CONNECTIONS%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
+                //NDBG_PRINT("%sSTART_CONNECTIONS%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
                 if(!l_cmdlet_repo->done())
                 {
-                        start_connections();
+                        int32_t l_status;
+                        l_status = start_connections();
+                        if(l_status != STATUS_OK)
+                        {
+                                NDBG_PRINT("%sSTART_CONNECTIONS%s ERROR!\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+                                return NULL;
+                        }
                 }
 
                 // Run loop
@@ -449,7 +446,7 @@ void *t_client::t_run(void *a_nothing)
 
         }
 
-        NDBG_PRINT("%sFINISHING_CONNECTIONS%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
+        //NDBG_PRINT("%sFINISHING_CONNECTIONS%s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF);
 
         // Still awaiting responses -wait...
         uint64_t l_cur_time = get_time_s();
@@ -500,7 +497,7 @@ void *t_client::t_run(void *a_nothing)
         libssh2_session_set_blocking(session, 0);
 
         // ---------------------------------------
-        // Hanshake
+        // Handshake
         // ---------------------------------------
         // ... start it up. This will trade welcome banners, exchange keys,
         // and setup crypto, compression, and MAC layers
@@ -728,7 +725,7 @@ int32_t t_client::start_connections(void)
              )
         {
 
-                // Loop trying to get reqlet
+                // Loop trying to get cmdlet
                 l_cmdlet = NULL;
                 while(((l_cmdlet = l_cmdlet_repo->try_get_resolved()) == NULL) && (!l_cmdlet_repo->done()));
                 if((l_cmdlet == NULL) && l_cmdlet_repo->done())
@@ -737,17 +734,23 @@ int32_t t_client::start_connections(void)
                         return STATUS_OK;
                 }
 
-                // Start connection for this reqlet
+                // Start connection for this cmdlet
                 //NDBG_PRINT("i_conn: %d\n", *i_conn);
                 nconn *l_nconn = m_nconn_vector[*i_conn];
                 // TODO Check for NULL
 
 
-                // Assign the reqlet for this connection
+                // Assign the cmdlet for this connection
                 l_nconn->set_data1(l_cmdlet);
 
                 // Set scheme
                 l_nconn->set_scheme(nconn::SCHEME_SSH);
+
+                // SSH settings
+                l_nconn->set_ssh2_user(m_user);
+                l_nconn->set_ssh2_password(m_password);
+                l_nconn->set_ssh2_public_key_file(m_public_key_file);
+                l_nconn->set_ssh2_private_key_file(m_private_key_file);
 
                 // Create request
                 create_cmd(*l_nconn, *l_cmdlet);
@@ -761,11 +764,11 @@ int32_t t_client::start_connections(void)
                 // TODO Make configurable
                 m_evr_loop->add_timer(m_timeout_s*1000, evr_loop_file_timeout_cb, l_nconn, &(l_nconn->m_timer_obj));
 
-                NDBG_PRINT("%sCONNECT%s: %s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF, l_cmdlet->m_host.c_str());
+                //NDBG_PRINT("%sCONNECT%s: %s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF, l_cmdlet->m_host.c_str());
                 l_nconn->set_host(l_cmdlet->m_host);
                 l_status = l_nconn->run_state_machine(m_evr_loop, l_cmdlet->m_host_info);
                 if((STATUS_OK != l_status) &&
-                                (l_nconn->get_state() != CONN_STATE_CONNECTING))
+                                (l_nconn->get_state() != nconn::CONN_STATE_CONNECTING))
                 {
                         NDBG_PRINT("Error: Performing do_connect\n");
                         T_CLIENT_CONN_CLEANUP(this, l_nconn, l_cmdlet, -1, "Performing do_connect");
@@ -807,7 +810,6 @@ int32_t t_client::create_cmd(nconn &ao_conn, const cmdlet &a_cmdlet)
 //: ----------------------------------------------------------------------------
 int32_t t_client::cleanup_connection(nconn *a_nconn, bool a_cancel_timer)
 {
-#if 0
         uint64_t l_conn_id = a_nconn->get_id();
 
         // Cancel last timer
@@ -824,9 +826,8 @@ int32_t t_client::cleanup_connection(nconn *a_nconn, bool a_cancel_timer)
         m_conn_used_set.erase(l_conn_id);
 
         // Reduce num pending
-        ++m_num_fetched;
-        --m_num_pending;
-#endif
+        ++m_num_cmds_completed;
+        --m_num_cmds_pending;
 
         return STATUS_OK;
 }

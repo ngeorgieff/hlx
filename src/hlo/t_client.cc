@@ -286,7 +286,7 @@ void *t_client::evr_loop_file_readable_cb(void *a_data)
         }
 
         // Check for done...
-        if((l_nconn->get_state() == CONN_STATE_DONE) ||
+        if((l_nconn->get_state() == nconn::CONN_STATE_DONE) ||
                         (l_status == STATUS_ERROR))
         {
                 // Add stats
@@ -556,7 +556,7 @@ int32_t t_client::start_connections(void)
                 l_nconn->set_host(l_reqlet->m_url.m_host);
                 l_status = l_nconn->run_state_machine(m_evr_loop, l_reqlet->m_host_info);
                 if((l_status != STATUS_OK) &&
-                                (l_nconn->get_state() != CONN_STATE_CONNECTING))
+                                (l_nconn->get_state() != nconn::CONN_STATE_CONNECTING))
                 {
                         NDBG_PRINT("Error: Performing do_connect: connection_state: %d status: %d\n", l_nconn->get_state(), l_status);
                         cleanup_connection(l_nconn);

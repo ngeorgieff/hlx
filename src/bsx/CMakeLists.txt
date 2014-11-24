@@ -44,7 +44,6 @@ SET(SRCS
   main.cc
   t_client.cc
   bsx.cc
-  cmdlet.cc
 )
 
 # Headers

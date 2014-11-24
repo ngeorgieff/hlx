@@ -62,7 +62,7 @@ int32_t bsx::run(host_list_t &a_host_list)
                         ++i_host, ++l_cmdlet_num)
         {
                 // Create a re
-                cmdlet *l_cmdlet = new cmdlet(l_cmdlet_num, *i_host, m_exec_line);
+                cmdlet *l_cmdlet = new cmdlet(l_cmdlet_num, *i_host, m_ssh2_exec_line);
                 // TODO Make port configurable
 
                 // Add to list
@@ -91,10 +91,10 @@ int32_t bsx::run(host_list_t &a_host_list)
                         m_timeout_s,
                         m_evr_loop_type,
                         m_start_parallel,
-                        m_user,
-                        m_password,
-                        m_public_key_file,
-                        m_private_key_file
+                        m_ssh2_user,
+                        m_ssh2_password,
+                        m_ssh2_public_key_file,
+                        m_ssh2_private_key_file
                 );
 
                 m_t_client_list.push_back(l_t_client);
@@ -208,6 +208,9 @@ int32_t bsx::init(void)
         // -------------------------------------------
         //t_async_resolver::get()->run();
 
+        // Set up Crypto locking...
+        //nconn_ssl_init(std::string());
+
         int l_libssh2_init_status;
         l_libssh2_init_status = libssh2_init(0);
         if (l_libssh2_init_status != 0)
@@ -238,12 +241,12 @@ bsx::bsx(void):
         m_evr_loop_type(EVR_LOOP_EPOLL),
         m_start_parallel(1),
         m_num_threads(1),
-        m_exec_line(),
         m_timeout_s(BSX_DEFAULT_CONN_TIMEOUT_S),
-        m_user(),
-        m_password(),
-        m_public_key_file(),
-        m_private_key_file()
+        m_ssh2_user(),
+        m_ssh2_password(),
+        m_ssh2_public_key_file(),
+        m_ssh2_private_key_file(),
+        m_ssh2_exec_line()
 {
 
 }

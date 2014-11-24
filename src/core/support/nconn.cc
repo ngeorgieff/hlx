@@ -27,6 +27,7 @@
 #include "nconn.h"
 #include "util.h"
 #include "reqlet.h"
+#include "cmdlet.h"
 #include "ndebug.h"
 #include "evr.h"
 #include "parsed_url.h"
@@ -75,18 +76,53 @@
                                 \
         } while(0)
 
-// TODO Add MACRO FOR GETTING SSH2 error
-#if 0
-        char *errmsg;
-        int errlen;
-        int err = libssh2_session_last_error(session, &errmsg, &errlen, 0);
-        fprintf(stderr, "Authentication by password failed: (%d) %s\n", err, errmsg);
-#endif
+
+// SSH2 Error
+#define SSH2_ERROR_MSG(a_session, a_msg) \
+        do { \
+                char *_errmsg;\
+                int _errlen;\
+                int _err = libssh2_session_last_error(a_session, &_errmsg, &_errlen, 0);\
+                NDBG_PRINT("%s. Reason[%d]: %s\n", a_msg, _err, _errmsg);\
+        } while(0)
+
 
 //: ----------------------------------------------------------------------------
 //: Fwd Decl's
 //: ----------------------------------------------------------------------------
 
+//: ----------------------------------------------------------------------------
+//: \details: TODO
+//: \return:  TODO
+//: \param:   TODO
+//: ----------------------------------------------------------------------------
+// TODO REMOVE THIS!!!
+static int ssh2_waitsocket(int a_socket_fd, LIBSSH2_SESSION *a_session)
+{
+        struct timeval l_timeout;
+        int l_rc;
+        fd_set l_fd;
+        fd_set *l_writefd = NULL;
+        fd_set *l_readfd = NULL;
+        int l_dir;
+
+        //printf("%s.%s.%d: BLoop.\n", __FILE__,__FUNCTION__,__LINE__);
+
+        l_timeout.tv_sec = 10;
+        l_timeout.tv_usec = 0;
+
+        FD_ZERO(&l_fd);
+        FD_SET(a_socket_fd, &l_fd);
+
+        // now make sure we wait in the correct direction
+        l_dir = libssh2_session_block_directions(a_session);
+        if (l_dir & LIBSSH2_SESSION_BLOCK_INBOUND)  l_readfd  = &l_fd;
+        if (l_dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) l_writefd = &l_fd;
+
+        l_rc = select(a_socket_fd + 1, l_readfd, l_writefd, NULL, &l_timeout);
+
+        return l_rc;
+}
 
 //: ----------------------------------------------------------------------------
 //: http-parser callbacks
@@ -576,8 +612,204 @@ int32_t nconn::ssl_connect_cb(const host_info_t &a_host_info)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
+int32_t nconn::ssh_connect_cb(const host_info_t &a_host_info)
+{
+
+        //NDBG_PRINT("%sRUN_SSH_STATE_MACHINE%s: STATE[%d] --START\n", ANSI_COLOR_BG_BLUE, ANSI_COLOR_OFF, m_ssh2_state);
+ssh_connect_top:
+        //NDBG_PRINT("%sRUN_SSH_STATE_MACHINE%s: STATE[%d]\n", ANSI_COLOR_BG_BLUE, ANSI_COLOR_OFF, m_ssh2_state);
+        switch(m_ssh2_state)
+        {
+        // -------------------------------------------
+        // Handshake
+        // -------------------------------------------
+        case SSH2_CONN_STATE_NONE:
+        case SSH2_CONN_STATE_HANDSHAKE:
+        {
+                m_ssh2_state = SSH2_CONN_STATE_HANDSHAKE;
+                int l_rc = 0;
+                l_rc = libssh2_session_handshake(m_ssh2_session, m_fd);
+                if(l_rc == 0)
+                {
+                        m_ssh2_state = SSH2_CONN_STATE_VALIDATION;
+                        goto ssh_connect_top;
+                }
+                else if(l_rc == LIBSSH2_ERROR_EAGAIN)
+                {
+                        return EAGAIN;
+                }
+                else
+                {
+                        SSH2_ERROR_MSG(m_ssh2_session, "Error performing libssh2_session_handshake");
+                        return STATUS_ERROR;
+                }
+        }
+        // -------------------------------------------
+        // Validation
+        // -------------------------------------------
+        case SSH2_CONN_STATE_VALIDATION:
+        {
+                // TODO Validation???
+                m_ssh2_state = SSH2_CONN_STATE_AUTHENTICATION;
+                goto ssh_connect_top;
+#if 0
+                nh = libssh2_knownhost_init(session);
+                if (!nh)
+                {
+                        // eeek, do cleanup here
+                        return 2;
+                }
+
+                // read all hosts from here
+                libssh2_knownhost_readfile(nh, "known_hosts", LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+
+                // store all known hosts to here
+                libssh2_knownhost_writefile(nh, "dumpfile", LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+
+                fingerprint = libssh2_session_hostkey(session, &len, &type);
+                if (fingerprint)
+                {
+                        struct libssh2_knownhost *host;
+#if LIBSSH2_VERSION_NUM >= 0x010206
+                        // introduced in 1.2.6
+                        int check = libssh2_knownhost_checkp(nh, hostname, 22,
+
+                                        fingerprint, len,
+                                        LIBSSH2_KNOWNHOST_TYPE_PLAIN|
+                                        LIBSSH2_KNOWNHOST_KEYENC_RAW,
+                                        &host);
+#else
+                        /* 1.2.5 or older */
+                        int check = libssh2_knownhost_check(nh, hostname,
+
+                        fingerprint, len, LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW, &host);
+#endif
+                        fprintf(stderr, "Host check: %d, key: %s\n", check,
+                                        (check <= LIBSSH2_KNOWNHOST_CHECK_MISMATCH) ? host->key : "<none>");
+
+                        // At this point, we could verify that 'check' tells us the key is
+                        // fine or bail out.
+
+                } else
+                {
+                        // eeek, do cleanup here
+                        return 3;
+                }
+                libssh2_knownhost_free(nh);
+#endif
+
+
+        }
+
+        // -------------------------------------------
+        // Authentication
+        // -------------------------------------------
+        case SSH2_CONN_STATE_AUTHENTICATION:
+        {
+                int l_rc = 0;
+                // -------------------------------
+                // Password
+                // -------------------------------
+                if (!m_ssh2_password.empty())
+                {
+                        l_rc = libssh2_userauth_password(m_ssh2_session,
+                                                         m_ssh2_user.c_str(),
+                                                         m_ssh2_password.c_str());
+                        if(l_rc == 0)
+                        {
+                                m_ssh2_state = SSH2_CONN_STATE_OPEN_SESSION;
+                                goto ssh_connect_top;
+                        }
+                        else if(l_rc == LIBSSH2_ERROR_EAGAIN)
+                        {
+                                return EAGAIN;
+                        }
+                        else
+                        {
+                                SSH2_ERROR_MSG(m_ssh2_session, "Error performing libssh2_userauth_password");
+                                return STATUS_ERROR;
+                        }
+                }
+                // -------------------------------
+                // Public/Private Key
+                // -------------------------------
+                else
+                {
+                        l_rc = libssh2_userauth_publickey_fromfile(m_ssh2_session,
+                                                                   m_ssh2_user.c_str(),
+                                                                   m_ssh2_public_key_file.c_str(),
+                                                                   m_ssh2_private_key_file.c_str(),
+                                                                   m_ssh2_password.c_str());
+                        if(l_rc == 0)
+                        {
+                                m_ssh2_state = SSH2_CONN_STATE_OPEN_SESSION;
+                                goto ssh_connect_top;
+                        }
+                        else if(l_rc == LIBSSH2_ERROR_EAGAIN)
+                        {
+                                return EAGAIN;
+                        }
+                        else
+                        {
+                                SSH2_ERROR_MSG(m_ssh2_session, "Error performing libssh2_userauth_publickey_fromfile");
+                                return STATUS_ERROR;
+                        }
+                }
+        }
+
+        // -------------------------------------------
+        // Open Session
+        // -------------------------------------------
+        case SSH2_CONN_STATE_OPEN_SESSION:
+        {
+                int l_rc = 0;
+
+                m_ssh2_channel = libssh2_channel_open_session(m_ssh2_session);
+                if(m_ssh2_channel)
+                {
+                        // Connected successfully ...We out!!!
+                        //NDBG_PRINT("%sRUN_SSH_STATE_MACHINE%s: STATE[%d] --WE OUTTIE---- :) \n", ANSI_COLOR_BG_GREEN, ANSI_COLOR_OFF, m_ssh2_state);
+                        m_ssh2_state = SSH2_CONN_STATE_CONNECTED;
+                        return STATUS_OK;
+                }
+                // m_ssh2_channel was NULL -check reason...
+                else
+                {
+                        l_rc = libssh2_session_last_error(m_ssh2_session, NULL, NULL, 0);
+                        if(l_rc == LIBSSH2_ERROR_EAGAIN)
+                        {
+                                return EAGAIN;
+                        }
+                        else
+                        {
+                                SSH2_ERROR_MSG(m_ssh2_session, "Error performing libssh2_channel_open_session");
+                                return STATUS_ERROR;
+                        }
+                }
+        }
+        // -------------------------------------------
+        // ???
+        // -------------------------------------------
+        default:
+        {
+                return STATUS_ERROR;
+        }
+        }
+
+        return STATUS_OK;
+
+}
+
+//: ----------------------------------------------------------------------------
+//: \details: TODO
+//: \return:  TODO
+//: \param:   TODO
+//: ----------------------------------------------------------------------------
 int32_t nconn::send_request(bool is_reuse)
 {
+
+        //NDBG_OUTPUT("%s: REQUEST-->\n%s%.*s%s\n", m_host.c_str(), ANSI_COLOR_BG_MAGENTA, (int)m_req_buf_len, m_req_buf, ANSI_COLOR_OFF);
+
         // Bump number requested
         ++m_num_reqs;
 
@@ -607,17 +839,11 @@ int32_t nconn::send_request(bool is_reuse)
         int l_status;
         while(l_bytes_written < m_req_buf_len)
         {
-                if (m_scheme == SCHEME_HTTPS)
-                {
-                        l_status = SSL_write(m_ssl, m_req_buf + l_bytes_written, m_req_buf_len - l_bytes_written);
-                        if(l_status < 0)
-                        {
-                                NDBG_PRINT("Error: performing SSL_write.\n");
-                                return STATUS_ERROR;
-                        }
-                        l_bytes_written += l_status;
-                }
-                else
+
+                // -----------------------------------------
+                //
+                // -----------------------------------------
+                if(m_scheme == SCHEME_HTTP)
                 {
                         l_status = write(m_fd, m_req_buf + l_bytes_written, m_req_buf_len - l_bytes_written);
                         if(l_status < 0)
@@ -627,6 +853,41 @@ int32_t nconn::send_request(bool is_reuse)
                         }
                         l_bytes_written += l_status;
 
+                }
+                // -----------------------------------------
+                //
+                // -----------------------------------------
+                else if(m_scheme == SCHEME_HTTPS)
+                {
+                        l_status = SSL_write(m_ssl, m_req_buf + l_bytes_written, m_req_buf_len - l_bytes_written);
+                        if(l_status < 0)
+                        {
+                                NDBG_PRINT("Error: performing SSL_write.\n");
+                                return STATUS_ERROR;
+                        }
+                        l_bytes_written += l_status;
+                }
+                // -----------------------------------------
+                //
+                // -----------------------------------------
+                else if(m_scheme == SCHEME_SSH)
+                {
+                        // ---------------------------------------
+                        // Exec command
+                        // ---------------------------------------
+                        int l_rc;
+                        // TODO Fix this mess!!!
+                        while ((l_rc = libssh2_channel_exec(m_ssh2_channel, m_req_buf)) == LIBSSH2_ERROR_EAGAIN)
+                        {
+                                ssh2_waitsocket(m_fd, m_ssh2_session);
+                        }
+                        if (l_rc != 0)
+                        {
+                                fprintf(stderr, "Error\n");
+                                exit(1);
+                        }
+                        // Break out of loop
+                        l_bytes_written = m_req_buf_len;
                 }
         }
 
@@ -662,8 +923,24 @@ int32_t nconn::read_cb(void)
         bool l_should_give_up = false;
 
         do {
+                // -----------------------------------------
+                // HTTP
+                // -----------------------------------------
+                if (m_scheme == SCHEME_HTTP)
+                {
+                        do {
+                                l_bytes_read = read(m_fd, m_read_buf + m_read_buf_idx, l_max_read);
+                                //NDBG_PRINT("%sHOST%s: %s fd[%3d] READ: %d bytes. Reason: %s\n",
+                                //                ANSI_COLOR_FG_RED, ANSI_COLOR_OFF, m_host.c_str(), m_fd,
+                                //                l_bytes_read,
+                                //                strerror(errno));
 
-                if (m_scheme == SCHEME_HTTPS)
+                        } while((l_bytes_read < 0) && (errno == EAGAIN));
+                }
+                // -----------------------------------------
+                // HTTPS
+                // -----------------------------------------
+                else if (m_scheme == SCHEME_HTTPS)
                 {
 
                         l_bytes_read = SSL_read(m_ssl, m_read_buf + m_read_buf_idx, l_max_read);
@@ -680,16 +957,52 @@ int32_t nconn::read_cb(void)
                                 }
                         }
                 }
-                else
+                // -----------------------------------------
+                // SSH
+                // -----------------------------------------
+                else if (m_scheme == SCHEME_SSH)
                 {
-                        do {
-                                l_bytes_read = read(m_fd, m_read_buf + m_read_buf_idx, l_max_read);
-                                //NDBG_PRINT("%sHOST%s: %s fd[%3d] READ: %d bytes. Reason: %s\n",
-                                //                ANSI_COLOR_FG_RED, ANSI_COLOR_OFF, m_host.c_str(), m_fd,
-                                //                l_bytes_read,
-                                //                strerror(errno));
 
-                        } while((l_bytes_read < 0) && (errno == EAGAIN));
+                        l_bytes_read = libssh2_channel_read(m_ssh2_channel, m_read_buf + m_read_buf_idx, l_max_read);
+                        //NDBG_PRINT("%sHOST%s: %s fd[%3d] READ: %d bytes. Reason[%d]: %s\n",
+                        //                ANSI_COLOR_FG_RED, ANSI_COLOR_OFF, m_host.c_str(), m_fd,
+                        //                l_bytes_read,
+                        //                errno,
+                        //                strerror(errno));
+                        if(l_bytes_read == LIBSSH2_ERROR_EAGAIN)
+                        {
+                                l_bytes_read = 0;
+                                errno = EAGAIN;
+                        }
+
+
+                        if(l_bytes_read > 0)
+                        {
+                                //NDBG_PRINT("%sREAD%s: [%d] %.*s\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF, m_read_buf_idx, l_bytes_read, m_read_buf + m_read_buf_idx);
+                                //ns_hlo::mem_display((const uint8_t *)m_read_buf + m_read_buf_idx, l_bytes_read);
+
+                                if(m_save_response_in_reqlet)
+                                {
+                                        // Get reqlet
+                                        cmdlet *l_cmdlet = static_cast<cmdlet *>(m_data1);
+                                        //NDBG_PRINT("%sREAD%s: Appending_to[%p]: %d bytes.\n", ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF, l_cmdlet, l_bytes_read);
+                                        if(l_cmdlet)
+                                        {
+                                                l_cmdlet->m_result.append(m_read_buf + m_read_buf_idx, l_bytes_read);
+                                        }
+                                }
+
+                        }
+
+                        //NDBG_PRINT("%sREAD%s: CHANNEL EOF STATUS: %d\n",
+                        //                ANSI_COLOR_BG_MAGENTA, ANSI_COLOR_OFF,
+                        //                libssh2_channel_eof(m_ssh2_channel));
+                        // Check for EOF
+                        if(libssh2_channel_eof(m_ssh2_channel) == 1)
+                        {
+                                // we outtie
+                                m_state = CONN_STATE_DONE;
+                        }
                 }
 
                 //NDBG_PRINT("%sHOST%s: %s fd[%3d]\n", ANSI_COLOR_FG_RED, ANSI_COLOR_OFF, m_host.c_str(), m_fd);
@@ -717,7 +1030,6 @@ int32_t nconn::read_cb(void)
 
                 // Stats
                 m_stat.m_total_bytes += l_bytes_read;
-
                 if(m_collect_stats_flag)
                 {
                         if((m_read_buf_idx == 0) && (m_stat.m_tt_first_read_us == 0))
@@ -726,31 +1038,37 @@ int32_t nconn::read_cb(void)
                         }
                 }
 
-                // Parse result
-                size_t l_parse_status = 0;
-                //NDBG_PRINT("%sHTTP_PARSER%s: m_read_buf: %p, m_read_buf_idx: %d, l_bytes_read: %d\n",
-                //                ANSI_COLOR_BG_YELLOW, ANSI_COLOR_OFF,
-                //                m_read_buf, (int)m_read_buf_idx, (int)l_bytes_read);
-                l_parse_status = http_parser_execute(&m_http_parser, &m_http_parser_settings, m_read_buf + m_read_buf_idx, l_bytes_read);
-                if(l_parse_status < (size_t)l_bytes_read)
+                // -----------------------------------------
+                // HTTP(S) Parse result
+                // -----------------------------------------
+                if ((m_scheme == SCHEME_HTTP) ||
+                    (m_scheme == SCHEME_HTTPS))
                 {
-                        if(m_verbose)
+                        size_t l_parse_status = 0;
+                        //NDBG_PRINT("%sHTTP_PARSER%s: m_read_buf: %p, m_read_buf_idx: %d, l_bytes_read: %d\n",
+                        //                ANSI_COLOR_BG_YELLOW, ANSI_COLOR_OFF,
+                        //                m_read_buf, (int)m_read_buf_idx, (int)l_bytes_read);
+                        l_parse_status = http_parser_execute(&m_http_parser, &m_http_parser_settings, m_read_buf + m_read_buf_idx, l_bytes_read);
+                        if(l_parse_status < (size_t)l_bytes_read)
                         {
-                                NDBG_PRINT("%s: Error: parse error.  Reason: %s: %s\n",
-                                                m_host.c_str(),
-                                                //"","");
-                                                http_errno_name((enum http_errno)m_http_parser.http_errno),
-                                                http_errno_description((enum http_errno)m_http_parser.http_errno));
-                                //NDBG_PRINT("%s: %sl_bytes_read%s[%d] <= 0 total = %u idx = %u\n",
-                                //		m_host.c_str(),
-                                //		ANSI_COLOR_FG_RED, ANSI_COLOR_OFF, l_bytes_read, l_total_bytes_read, m_read_buf_idx);
-                                //ns_hlo::mem_display((const uint8_t *)m_read_buf + m_read_buf_idx, l_bytes_read);
+                                if(m_verbose)
+                                {
+                                        NDBG_PRINT("%s: Error: parse error.  Reason: %s: %s\n",
+                                                        m_host.c_str(),
+                                                        //"","");
+                                                        http_errno_name((enum http_errno)m_http_parser.http_errno),
+                                                        http_errno_description((enum http_errno)m_http_parser.http_errno));
+                                        //NDBG_PRINT("%s: %sl_bytes_read%s[%d] <= 0 total = %u idx = %u\n",
+                                        //		m_host.c_str(),
+                                        //		ANSI_COLOR_FG_RED, ANSI_COLOR_OFF, l_bytes_read, l_total_bytes_read, m_read_buf_idx);
+                                        //ns_hlo::mem_display((const uint8_t *)m_read_buf + m_read_buf_idx, l_bytes_read);
+
+                                }
+
+                                m_read_buf_idx += l_bytes_read;
+                                return STATUS_ERROR;
 
                         }
-
-                        m_read_buf_idx += l_bytes_read;
-                        return STATUS_ERROR;
-
                 }
 
                 m_read_buf_idx += l_bytes_read;
@@ -780,13 +1098,51 @@ int32_t nconn::read_cb(void)
 //: ----------------------------------------------------------------------------
 int32_t nconn::done_cb(void)
 {
-
         // Shut down connection
-        if (m_scheme == SCHEME_HTTPS) {
-                if(m_ssl) {
+        if (m_scheme == SCHEME_HTTP)
+        {
+
+        }
+        else if (m_scheme == SCHEME_HTTPS)
+        {
+                if(m_ssl)
+                {
                         SSL_free(m_ssl);
                         m_ssl = NULL;
                 }
+        }
+        else if (m_scheme == SCHEME_SSH)
+        {
+
+                int32_t l_rc;
+                while ((l_rc = libssh2_channel_close(m_ssh2_channel)) == LIBSSH2_ERROR_EAGAIN)
+                {
+                        // TODO Can we just spin here? -sans wait socket
+                        ssh2_waitsocket(m_fd, m_ssh2_session);
+                }
+
+                //int32_t l_exitcode = 127;
+                //char *l_exitsignal = (char *) "none";
+                //if (l_rc == 0)
+                //{
+                //        l_exitcode = libssh2_channel_get_exit_status(m_ssh2_channel);
+                //        libssh2_channel_get_exit_signal(m_ssh2_channel, &l_exitsignal,NULL, NULL, NULL, NULL, NULL);
+                //}
+                //if (l_exitsignal)
+                //{
+                //        fprintf(stderr, "\nGot signal: %s\n", l_exitsignal);
+                //}
+                //else
+                //{
+                //        fprintf(stderr, "\nEXIT: %d\n", l_exitcode);
+                //}
+
+                libssh2_channel_free(m_ssh2_channel);
+                m_ssh2_channel = NULL;
+                libssh2_session_disconnect(m_ssh2_session,"Normal Shutdown, Thank you for playing");
+                libssh2_session_free(m_ssh2_session);
+                m_ssh2_session = NULL;
+                m_ssh2_state = SSH2_CONN_STATE_NONE;
         }
 
         //NDBG_PRINT("CLOSE[%lu--%d] %s--CONN--%s\n", m_id, m_fd, ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
@@ -833,6 +1189,10 @@ state_top:
         //NDBG_PRINT("%sRUN_STATE_MACHINE%s: STATE[%d]\n", ANSI_COLOR_BG_YELLOW, ANSI_COLOR_OFF, m_state);
         switch (m_state)
         {
+
+        // -------------------------------------------------
+        // STATE: FREE
+        // -------------------------------------------------
         case CONN_STATE_FREE:
         {
                 int32_t l_status;
@@ -861,6 +1221,10 @@ state_top:
                 goto state_top;
 
         }
+
+        // -------------------------------------------------
+        // STATE: CONNECTING
+        // -------------------------------------------------
         case CONN_STATE_CONNECTING:
         {
                 //int l_status;
@@ -874,10 +1238,10 @@ state_top:
                 //++l_retry;
                 //NDBG_PRINT_BT();
                 //NDBG_PRINT("%sCONNECT%s[%3d]: Retry: %d Status %3d. Reason[%d]: %s\n",
-                //                ANSI_COLOR_FG_CYAN, ANSI_COLOR_OFF,
-                //                m_fd, l_retry_connect_count, l_connect_status,
-                //                errno,
-                //                strerror(errno));
+                //           ANSI_COLOR_FG_CYAN, ANSI_COLOR_OFF,
+                //           m_fd, l_retry_connect_count, l_connect_status,
+                //           errno,
+                //           strerror(errno));
 
                 if (l_connect_status < 0)
                 {
@@ -986,7 +1350,7 @@ state_top:
                 }
                 else if(m_scheme == SCHEME_SSH)
                 {
-
+                        m_state = CONN_STATE_SSH_CONNECTING;
                 }
 
                 // -------------------------------------------
@@ -1002,6 +1366,10 @@ state_top:
 
                 goto state_top;
         }
+
+        // -------------------------------------------------
+        // STATE: SSL_CONNECTING
+        // -------------------------------------------------
         case CONN_STATE_SSL_CONNECTING:
         case CONN_STATE_SSL_CONNECTING_WANT_WRITE:
         case CONN_STATE_SSL_CONNECTING_WANT_READ:
@@ -1052,6 +1420,58 @@ state_top:
 
                 goto state_top;
         }
+
+        // -------------------------------------------------
+        // STATE: SSH_CONNECTING
+        // -------------------------------------------------
+        case CONN_STATE_SSH_CONNECTING:
+        {
+                int l_status;
+                //NDBG_PRINT("%sSSH_CONNECTING%s\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+                l_status = ssh_connect_cb(a_host_info);
+                if(EAGAIN == l_status)
+                {
+                        // All directions???
+                        if (0 != a_evr_loop->mod_fd(m_fd,
+                                                    EVR_FILE_ATTR_MASK_WRITE|
+                                                    EVR_FILE_ATTR_MASK_READ|
+                                                    EVR_FILE_ATTR_MASK_STATUS_ERROR,
+                                                    this))
+                        {
+                                NDBG_PRINT("Error: Couldn't add socket file descriptor\n");
+                                return STATUS_ERROR;
+                        }
+
+                        return STATUS_OK;
+                }
+                else if(STATUS_OK != l_status)
+                {
+                        NDBG_PRINT("Error: performing connect_cb\n");
+                        return STATUS_ERROR;
+                }
+
+                // Set as connected
+                m_state = CONN_STATE_CONNECTED;
+
+                // -------------------------------------------
+                // Add to event handler
+                // -------------------------------------------
+                if (0 != a_evr_loop->mod_fd(m_fd,
+                                            EVR_FILE_ATTR_MASK_READ|
+                                            EVR_FILE_ATTR_MASK_STATUS_ERROR,
+                                            this))
+                {
+                        NDBG_PRINT("Error: Couldn't add socket file descriptor\n");
+                        return STATUS_ERROR;
+                }
+
+                goto state_top;
+
+        }
+
+        // -------------------------------------------------
+        // STATE: CONNECTED
+        // -------------------------------------------------
         case CONN_STATE_CONNECTED:
         {
                 // -------------------------------------------
@@ -1067,6 +1487,10 @@ state_top:
                 }
                 break;
         }
+
+        // -------------------------------------------------
+        // STATE: READING
+        // -------------------------------------------------
         case CONN_STATE_READING:
         {
                 int l_read_status = 0;

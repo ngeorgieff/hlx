@@ -88,7 +88,15 @@ void cmdlet::set_result(int32_t a_status, const char *a_result)
 {
         // Set cmdlet response
         m_status = a_status;
-        m_result = a_result;
+
+        if(a_result)
+        {
+                std::string l_result(a_result);
+                if(!l_result.empty())
+                {
+                        m_result = a_result;
+                }
+        }
         std::string l_result(a_result);
 }
 
@@ -97,9 +105,35 @@ void cmdlet::set_result(int32_t a_status, const char *a_result)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-void cmdlet_repo::dump_all_results(void)
+void cmdlet_repo::dump_all_results(bool a_color)
 {
-        // TODO
+        std::string l_host_color = "";
+        //std::string l_status_color = "";
+        std::string l_result_color = "";
+        std::string l_off_color = "";
+        if(a_color)
+        {
+                l_host_color = ANSI_COLOR_FG_BLUE;
+                //l_status_color = ANSI_COLOR_FG_GREEN;
+                l_result_color = ANSI_COLOR_FG_YELLOW;
+                l_off_color = ANSI_COLOR_OFF;
+        }
+
+        for(cmdlet_list_t::iterator i_cmdlet = m_cmdlet_list.begin();
+            i_cmdlet != m_cmdlet_list.end();
+            ++i_cmdlet)
+        {
+                NDBG_OUTPUT("OUTPUT_CMDLET[%p]: result_length: %d\n", *i_cmdlet, (int)(*i_cmdlet)->m_result.length());
+
+                // Host
+                NDBG_OUTPUT("[%s%s%s]:\n", l_host_color.c_str(), (*i_cmdlet)->m_host.c_str(), l_off_color.c_str());
+
+                // Result
+                NDBG_OUTPUT("%s%s%s\n", l_result_color.c_str(), (*i_cmdlet)->m_result.c_str(), l_off_color.c_str());
+
+                // Status Code
+                // TODO
+        }
 }
 
 //: ----------------------------------------------------------------------------
