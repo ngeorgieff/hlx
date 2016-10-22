@@ -119,32 +119,6 @@
         } while(0);
 
 //: ----------------------------------------------------------------------------
-//: ANSI Color Code Strings
-//:
-//: Taken from:
-//: http://pueblo.sourceforge.net/doc/manual/ansi_color_codes.html
-//: ----------------------------------------------------------------------------
-#define ANSI_COLOR_OFF          "\033[0m"
-#define ANSI_COLOR_FG_BLACK     "\033[01;30m"
-#define ANSI_COLOR_FG_RED       "\033[01;31m"
-#define ANSI_COLOR_FG_GREEN     "\033[01;32m"
-#define ANSI_COLOR_FG_YELLOW    "\033[01;33m"
-#define ANSI_COLOR_FG_BLUE      "\033[01;34m"
-#define ANSI_COLOR_FG_MAGENTA   "\033[01;35m"
-#define ANSI_COLOR_FG_CYAN      "\033[01;36m"
-#define ANSI_COLOR_FG_WHITE     "\033[01;37m"
-#define ANSI_COLOR_FG_DEFAULT   "\033[01;39m"
-#define ANSI_COLOR_BG_BLACK     "\033[01;40m"
-#define ANSI_COLOR_BG_RED       "\033[01;41m"
-#define ANSI_COLOR_BG_GREEN     "\033[01;42m"
-#define ANSI_COLOR_BG_YELLOW    "\033[01;43m"
-#define ANSI_COLOR_BG_BLUE      "\033[01;44m"
-#define ANSI_COLOR_BG_MAGENTA   "\033[01;45m"
-#define ANSI_COLOR_BG_CYAN      "\033[01;46m"
-#define ANSI_COLOR_BG_WHITE     "\033[01;47m"
-#define ANSI_COLOR_BG_DEFAULT   "\033[01;49m"
-
-//: ----------------------------------------------------------------------------
 //: Enums
 //: ----------------------------------------------------------------------------
 // ---------------------------------------
@@ -799,7 +773,7 @@ int32_t session::teardown(ns_hlx::http_status_t a_status)
 //: ----------------------------------------------------------------------------
 int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
 {
-        //NDBG_PRINT("RUN a_conn_mode: %d a_data: %p\n", a_conn_mode, a_data);
+        NDBG_PRINT("RUN a_conn_mode: %d a_data: %p\n", a_conn_mode, a_data);
         //CHECK_FOR_NULL_ERROR(a_data);
         // TODO -return OK for a_data == NULL
         if(!a_data)
@@ -945,7 +919,7 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                 uint32_t l_read = 0;
                 uint32_t l_written = 0;
                 l_s = l_nconn->nc_run_state_machine(a_conn_mode, l_in_q, l_read, l_out_q, l_written);
-                //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d\n", a_conn_mode, l_s);
+                NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d\n", a_conn_mode, l_s);
 #if 0
                 if(l_t_srvr)
                 {
@@ -959,6 +933,9 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                    (l_s == ns_hlx::nconn::NC_STATUS_ERROR) ||
                    l_nconn->is_done())
                 {
+                        NDBG_PRINT("l_ses->m_subr:      %p\n", l_ses->m_subr);
+                        NDBG_PRINT("l_nconn->is_done(): %d\n", l_nconn->is_done());
+                        NDBG_PRINT("goto check_conn_status\n");
                         goto check_conn_status;
                 }
                 // -----------------------------------------
@@ -1038,9 +1015,12 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                 else if(l_s == ns_hlx::nconn::NC_STATUS_OK)
                 {
                         l_s = ns_hlx::nconn::NC_STATUS_BREAK;
+                        NDBG_PRINT("goto check_conn_status\n");
                         goto check_conn_status;
                 }
+
 check_conn_status:
+                NDBG_PRINT("goto check_conn_status\n");
                 if(l_nconn->is_free())
                 {
                         return HLX_STATUS_OK;
@@ -1062,6 +1042,7 @@ check_conn_status:
                 {
                 case ns_hlx::nconn::NC_STATUS_BREAK:
                 {
+                        NDBG_PRINT("GOTO DONE!\n");
                         goto done;
                 }
                 case ns_hlx::nconn::NC_STATUS_EOF:
@@ -1297,14 +1278,10 @@ int32_t t_hurl::subr_try_start(void)
         l_nconn->set_evr_loop(m_evr_loop);
         // Setup clnt_session
         l_ses->m_nconn = l_nconn;
-
-        // TODO ???
-#if 0
-        //l_ses->m_subr = &a_subr;
+        l_ses->m_subr = &m_subr;
 
         // Assign clnt_session
         //a_subr.set_ups_srvr_session(l_uss);
-#endif
 
         // ---------------------------------------
         // setup resp
@@ -2140,7 +2117,8 @@ int main(int argc, char** argv)
 #endif
 
         // Suppress errors
-        ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_NONE);
+        ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_ALL);
+        ns_hlx::trc_out_file_open("/dev/sdout");
 
         // For sighandler
         settings_struct_t l_settings;

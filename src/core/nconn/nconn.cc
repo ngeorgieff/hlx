@@ -213,6 +213,7 @@ state_top:
                         {
                                 return l_status;
                         }
+
                         default:
                         {
                                 break;
@@ -334,7 +335,7 @@ int32_t nconn::nc_read(nbq *a_in_q, uint32_t &ao_read)
                         break;
                 }
         } while(l_status > 0);
-        return HLX_STATUS_OK;
+        return NC_STATUS_OK;
 }
 
 //: ----------------------------------------------------------------------------
@@ -402,7 +403,7 @@ int32_t nconn::nc_write(nbq *a_out_q, uint32_t &ao_written)
                 a_out_q->b_read_incr(l_status);
                 a_out_q->shrink();
         } while(l_status > 0 && a_out_q->read_avail());
-        return HLX_STATUS_OK;
+        return NC_STATUS_OK;
 }
 
 //: ----------------------------------------------------------------------------
