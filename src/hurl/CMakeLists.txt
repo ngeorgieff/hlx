@@ -40,6 +40,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}
     ../core/support
     ../core/evr
     ../core/nconn
+    ../core/ndebug
 )
 
 #add_definitions(-std=c++0x)

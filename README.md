@@ -11,24 +11,6 @@ A few utilities for testing and curling from http servers.
 *hurl* has support for range expansion in urls which is useful for testing a server's capability to serve from many files. *hurl* will expand the ranges specified in the wildcards and perform requests in user configurable orders (see the "--mode" option in help).
 eg: "http://127.0.0.1:8089/[1-100]/my_[1-9]_file.html".
 
-* **Stats API**:
-If  *hurl* is started with *-P port_number* option,  *hurl* listens on the user specified port for stats requests:
-For example if hurl is run with:
-```bash
-~>hurl "http://127.0.0.1:8089/index.html" -P12345
-Running 1 parallel connections with: 1 reqs/conn, 1 threads
-+-----------/-----------+-----------+-----------+--------------+-----------+-------------+-----------+
-|    Cmpltd /     Total |    IdlKil |    Errors | kBytes Recvd |   Elapsed |       Req/s |      MB/s |
-+-----------/-----------+-----------+-----------+--------------+-----------+-------------+-----------+
-|      2603 /      2603 |         0 |         0 |      2158.15 |     0.20s |       0.00s |     0.00s |
-|      5250 /      5250 |         0 |         0 |      4352.78 |     0.40s |   13235.00s |    10.72s |
-|      7831 /      7831 |         0 |         0 |      6492.69 |     0.60s |   12905.00s |    10.45s |
-|     10390 /     10390 |         0 |         0 |      8614.37 |     0.80s |   12795.00s |    10.36s |
-|     13131 /     13131 |         0 |         0 |     10886.93 |     1.00s |   13705.00s |    11.10s |
-|     15737 /     15737 |         0 |         0 |     13047.57 |     1.20s |   13030.00s |    10.55s |
-...
-```
-
 ####An example
 ```bash
 hurl "http://127.0.0.1/index.html" --num_calls=100 -p100 -f100000 -c
@@ -72,7 +54,6 @@ Print Options:
   
 Stat Options:
   -U, --update         Update output every N ms. Default 500ms.
-  -P, --data_port      Start HTTP Stats Daemon on port.
   
 Results Options:
   -j, --json           Display results in json
