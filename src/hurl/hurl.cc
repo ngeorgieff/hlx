@@ -949,6 +949,7 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                         if(l_ses->m_resp &&
                            l_ses->m_resp->m_complete)
                         {
+                                NDBG_PRINT("COMPLETE\n");
                                 // Cancel timer
                                 l_ses->cancel_timer(l_ses->m_timer_obj);
                                 // TODO Check status
@@ -960,53 +961,57 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                         l_uss->m_resp->show();
                                         if(l_uss->m_rqst_resp_logging_color) TRC_OUTPUT("%s", ANSI_COLOR_OFF);
                                 }
+#endif
+
+#if 0
                                 // Get request time
                                 if(l_nconn->get_collect_stats_flag())
                                 {
                                         l_nconn->set_stat_tt_completion_us(get_delta_time_us(l_nconn->get_connect_start_time_us()));
                                 }
+#endif
+
+#if 0
                                 if(l_uss->m_resp && l_t_srvr)
                                 {
                                         l_t_srvr->add_stat_to_agg(l_nconn->get_stats(), l_uss->m_resp->get_status());
                                 }
+#endif
                                 bool l_hmsg_keep_alive = false;
-                                if(l_uss->m_resp)
+                                if(l_ses->m_resp)
                                 {
-                                        l_hmsg_keep_alive = l_uss->m_resp->m_supports_keep_alives;
+                                        l_hmsg_keep_alive = l_ses->m_resp->m_supports_keep_alives;
                                 }
                                 bool l_nconn_can_reuse = l_nconn->can_reuse();
-                                bool l_keepalive = l_uss->m_subr->get_keepalive();
-                                bool l_detach_resp = l_uss->m_subr->get_detach_resp();
-                                bool l_complete = l_uss->subr_complete();
+                                bool l_keepalive = l_ses->m_subr->get_keepalive();
+                                bool l_complete = l_ses->subr_complete();
                                 if(l_complete ||
                                    !l_nconn_can_reuse ||
                                    !l_keepalive ||
                                    !l_hmsg_keep_alive)
                                 {
-                                        l_s = nconn::NC_STATUS_EOF;
+                                        l_s = ns_hlx::nconn::NC_STATUS_EOF;
                                         goto check_conn_status;
                                 }
                                 // Give back rqst + in q
-                                if(l_t_srvr)
+                                if(l_t_hurl)
                                 {
+#if 0
                                         l_t_srvr->release_nbq(l_uss->m_out_q);
                                         l_uss->m_out_q = NULL;
-                                        if(!l_detach_resp)
+                                        if(l_uss->m_resp)
                                         {
-                                                if(l_uss->m_resp)
-                                                {
-                                                        l_t_srvr->release_resp(l_uss->m_resp);
-                                                        l_uss->m_resp = NULL;
-                                                }
-                                                if(!l_uss->m_in_q_detached)
-                                                {
-                                                        l_t_srvr->release_nbq(l_uss->m_in_q);
-                                                        l_uss->m_in_q = NULL;
-                                                }
+                                                l_t_srvr->release_resp(l_uss->m_resp);
+                                                l_uss->m_resp = NULL;
                                         }
+                                        if(!l_uss->m_in_q_detached)
+                                        {
+                                                l_t_srvr->release_nbq(l_uss->m_in_q);
+                                                l_uss->m_in_q = NULL;
+                                        }
+#endif
                                 }
                                 l_idle = true;
-#endif
                         }
                 }
                 // -----------------------------------------
@@ -1168,12 +1173,14 @@ void *t_hurl::t_run(void *a_nothing)
                         // TODO log run failure???
                 }
                 // Subrequests
+#if 0
                 l_s = subr_try_start();
                 if(l_s != HLX_STATUS_OK)
                 {
                         //NDBG_PRINT("Error performing subr_try_deq.\n");
                         //return NULL;
                 }
+#endif
         }
         //NDBG_PRINT("Stopped...\n");
         m_stopped = true;
@@ -1297,12 +1304,14 @@ int32_t t_hurl::subr_try_start(void)
         l_resp = l_ses->m_resp
         get_from_pool_if_null(l_resp, m_resp_pool);
 #endif
-        l_resp->init(m_subr.get_save());
+
+        //l_resp->init(m_subr.get_save());
+        l_resp->init(true);
         l_resp->m_http_parser->data = l_resp;
         l_nconn->set_read_cb(ns_hlx::http_parse);
         l_nconn->set_read_cb_data(l_resp);
         l_ses->m_resp = l_resp;
-        l_ses->m_resp->m_expect_resp_body_flag = false;
+        l_ses->m_resp->m_expect_resp_body_flag = m_subr.get_expect_resp_body_flag();
 #if 0
         l_ses->m_rqst_resp_logging = false;
         l_ses->m_rqst_resp_logging_color = false;
@@ -2118,7 +2127,7 @@ int main(int argc, char** argv)
 
         // Suppress errors
         ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_ALL);
-        ns_hlx::trc_out_file_open("/dev/sdout");
+        ns_hlx::trc_out_file_open("/dev/stdout");
 
         // For sighandler
         settings_struct_t l_settings;
