@@ -343,7 +343,7 @@ void command_exec(settings_struct_t &a_settings)
         // ---------------------------------------
         while (!g_test_finished)
         {
-                //NDBG_PRINT("BOOP.\n");
+                NDBG_PRINT("%swhile%s\n",ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF);
 
                 i = kbhit();
                 if (i != 0)
@@ -442,6 +442,7 @@ void command_exec(settings_struct_t &a_settings)
                         }
                 }
         }
+        NDBG_PRINT("%swhile%s done\n",ANSI_COLOR_BG_GREEN, ANSI_COLOR_OFF);
         nonblock(NB_DISABLE);
 }
 
@@ -552,14 +553,22 @@ class t_hurl
 {
 public:
         // -------------------------------------------------
+        // Types
+        // -------------------------------------------------
+        typedef std::list <ns_hlx::nconn *> idle_nconn_list_t;
+
+        // -------------------------------------------------
         // Public methods
         // -------------------------------------------------
         t_hurl(ns_hlx::subr a_subr):
                 m_t_run_thread(),
+                m_idle_nconn_list(),
+                m_num_in_progress(0),
                 m_subr(a_subr),
                 m_stopped(true),
                 m_evr_loop(NULL),
-                m_is_initd(false)
+                m_is_initd(false),
+                m_num_parallel_max(10)
         {}
         ~t_hurl()
         {}
@@ -580,6 +589,7 @@ public:
                         return HLX_STATUS_ERROR;
                 }
                 m_is_initd = true;
+                m_subr.set_data(this);
                 return HLX_STATUS_OK;
         }
         int run(void) {
@@ -593,6 +603,7 @@ public:
         void *t_run(void *a_nothing);
         int32_t subr_try_start(void);
         void stop(void) {
+                NDBG_PRINT("CALLING STOP\n");
                 m_stopped = true;
                 m_evr_loop->signal();
         }
@@ -609,6 +620,8 @@ public:
         // Public members
         // -------------------------------------------------
         pthread_t m_t_run_thread;
+        idle_nconn_list_t m_idle_nconn_list;
+        uint32_t m_num_in_progress;
 private:
         // -------------------------------------------------
         // Private methods
@@ -622,6 +635,9 @@ private:
         {
                 return reinterpret_cast<t_hurl *>(a_context)->t_run(NULL);
         }
+        ns_hlx::nconn *create_new_nconn(void);
+        int32_t subr_start(void);
+        int32_t subr_dequeue(void);
         // -------------------------------------------------
         // Private members
         // -------------------------------------------------
@@ -629,6 +645,7 @@ private:
         sig_atomic_t m_stopped;
         ns_hlx::evr_loop *m_evr_loop;
         bool m_is_initd;
+        uint32_t m_num_parallel_max;
 };
 
 //: ----------------------------------------------------------------------------
@@ -651,7 +668,6 @@ bool session::subr_complete(void)
 #endif
         // Get vars -completion -can delete subr object
         bool l_connect_only = m_subr->get_connect_only();
-        bool l_detach_resp = m_subr->get_detach_resp();
         ns_hlx::subr::completion_cb_t l_completion_cb = m_subr->get_completion_cb();
         // Call completion handler
         if(l_completion_cb)
@@ -662,12 +678,6 @@ bool session::subr_complete(void)
         if(l_connect_only)
         {
                 l_complete = true;
-        }
-        if(l_detach_resp)
-        {
-                m_subr = NULL;
-                m_resp = NULL;
-                m_in_q = NULL;
         }
         return l_complete;
 }
@@ -773,7 +783,7 @@ int32_t session::teardown(ns_hlx::http_status_t a_status)
 //: ----------------------------------------------------------------------------
 int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
 {
-        NDBG_PRINT("RUN a_conn_mode: %d a_data: %p\n", a_conn_mode, a_data);
+        //NDBG_PRINT("RUN a_conn_mode: %d a_data: %p\n", a_conn_mode, a_data);
         //CHECK_FOR_NULL_ERROR(a_data);
         // TODO -return OK for a_data == NULL
         if(!a_data)
@@ -919,7 +929,7 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                 uint32_t l_read = 0;
                 uint32_t l_written = 0;
                 l_s = l_nconn->nc_run_state_machine(a_conn_mode, l_in_q, l_read, l_out_q, l_written);
-                NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d\n", a_conn_mode, l_s);
+                //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d\n", a_conn_mode, l_s);
 #if 0
                 if(l_t_srvr)
                 {
@@ -954,14 +964,23 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 l_ses->cancel_timer(l_ses->m_timer_obj);
                                 // TODO Check status
                                 l_ses->m_timer_obj = NULL;
+
+                                // Decrement in progress
+                                if(l_t_hurl->m_num_in_progress)
+                                {
+                                        --l_t_hurl->m_num_in_progress;
+                                }
+
 #if 0
                                 if(l_uss->m_rqst_resp_logging && l_uss->m_resp)
-                                {
-                                        if(l_uss->m_rqst_resp_logging_color) TRC_OUTPUT("%s", ANSI_COLOR_FG_CYAN);
-                                        l_uss->m_resp->show();
-                                        if(l_uss->m_rqst_resp_logging_color) TRC_OUTPUT("%s", ANSI_COLOR_OFF);
-                                }
 #endif
+                                {
+                                        //if(l_uss->m_rqst_resp_logging_color)
+                                        TRC_OUTPUT("%s", ANSI_COLOR_FG_CYAN);
+                                        l_ses->m_resp->show();
+                                        //if(l_uss->m_rqst_resp_logging_color)
+                                        TRC_OUTPUT("%s", ANSI_COLOR_OFF);
+                                }
 
 #if 0
                                 // Get request time
@@ -1020,12 +1039,12 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                 else if(l_s == ns_hlx::nconn::NC_STATUS_OK)
                 {
                         l_s = ns_hlx::nconn::NC_STATUS_BREAK;
-                        NDBG_PRINT("goto check_conn_status\n");
+                        //NDBG_PRINT("goto check_conn_status\n");
                         goto check_conn_status;
                 }
 
 check_conn_status:
-                NDBG_PRINT("goto check_conn_status\n");
+                //NDBG_PRINT("goto check_conn_status\n");
                 if(l_nconn->is_free())
                 {
                         return HLX_STATUS_OK;
@@ -1098,24 +1117,11 @@ check_conn_status:
         if((l_s == ns_hlx::nconn::NC_STATUS_AGAIN) &&
            l_idle)
         {
-#if 0
-                if(l_ses && l_t_hurl)
+                if(l_t_hurl)
                 {
-                        l_t_srvr->m_ups_srvr_session_pool.release(l_uss);
-                        l_uss = NULL;
+                        l_t_hurl->m_idle_nconn_list.push_back(l_nconn);
                 }
                 l_nconn->set_data(NULL);
-                if(l_t_srvr)
-                {
-                        int32_t l_status;
-                        l_status = l_t_srvr->m_nconn_proxy_pool.add_idle(l_nconn);
-                        if(l_status != HLX_STATUS_OK)
-                        {
-                                TRC_ERROR("performing m_nconn_proxy_pool.add_idle(%p)\n", l_nconn);
-                                return HLX_STATUS_ERROR;
-                        }
-                }
-#endif
                 // TODO start new subr???
                 return HLX_STATUS_OK;
         }
@@ -1158,7 +1164,7 @@ void *t_hurl::t_run(void *a_nothing)
         //uint64_t l_num_run = 0;
 #endif
 
-        l_s = subr_try_start();
+        l_s = subr_dequeue();
         // TODO check return status???
 
         // -------------------------------------------------
@@ -1173,16 +1179,15 @@ void *t_hurl::t_run(void *a_nothing)
                         // TODO log run failure???
                 }
                 // Subrequests
-#if 0
-                l_s = subr_try_start();
+                NDBG_PRINT("subr_dequeue.\n");
+                l_s = subr_dequeue();
                 if(l_s != HLX_STATUS_OK)
                 {
                         //NDBG_PRINT("Error performing subr_try_deq.\n");
                         //return NULL;
                 }
-#endif
         }
-        //NDBG_PRINT("Stopped...\n");
+        NDBG_PRINT("Stopped... m_stopped: %d\n", m_stopped);
         m_stopped = true;
         return NULL;
 }
@@ -1192,21 +1197,40 @@ void *t_hurl::t_run(void *a_nothing)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-int32_t t_hurl::subr_try_start(void)
+int32_t t_hurl::subr_dequeue(void)
 {
-        // ---------------------------------------
-        // num parallel check
-        // ---------------------------------------
-        // TODO
+        uint32_t l_dq = 0;
+        while(!m_stopped &&
+              (m_num_in_progress < m_num_parallel_max))
+        {
+                int32_t l_s;
+                l_s = subr_start();
+                if(l_s != HLX_STATUS_OK)
+                {
+                        // Log error
+                        NDBG_PRINT("%sERROR DEQUEUEING%s\n", ANSI_COLOR_FG_RED, ANSI_COLOR_OFF);
+                }
+                else
+                {
+                      ++m_num_in_progress;
+                }
+                ++l_dq;
+        }
+        NDBG_PRINT("%sDEQUEUEd%s: %u progress/max %u/%u\n",
+                        ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF,
+                        l_dq,
+                        m_num_in_progress, m_num_parallel_max);
+        return HLX_STATUS_OK;
+}
 
-        //NDBG_PRINT("l_subr label: %s --HOST: %s\n", a_subr.get_label().c_str(), a_subr.get_host().c_str());
-        // Only run on resolved
-        int32_t l_s;
-        //std::string l_error;
-
-        // Try get idle from proxy pool
+//: ----------------------------------------------------------------------------
+//: \details: TODO
+//: \return:  TODO
+//: \param:   TODO
+//: ----------------------------------------------------------------------------
+ns_hlx::nconn *t_hurl::create_new_nconn(void)
+{
         ns_hlx::nconn *l_nconn = NULL;
-
         // ---------------------------------------
         // setup connection
         // ---------------------------------------
@@ -1220,13 +1244,13 @@ int32_t t_hurl::subr_try_start(void)
         }
         else
         {
-                return HLX_STATUS_ERROR;
+                return NULL;
         }
         l_nconn->set_ctx(this);
         l_nconn->set_num_reqs_per_conn(-1);
         l_nconn->set_collect_stats(false);
         l_nconn->set_connect_only(false);
-
+        l_nconn->set_evr_loop(m_evr_loop);
         l_nconn->setup_evr_fd(session::evr_fd_readable_cb,
                               session::evr_fd_writeable_cb,
                               session::evr_fd_error_cb);
@@ -1263,6 +1287,40 @@ int32_t t_hurl::subr_try_start(void)
 #endif
 
         l_nconn->set_host_info(m_subr.get_host_info());
+        return l_nconn;
+}
+
+//: ----------------------------------------------------------------------------
+//: \details: TODO
+//: \return:  TODO
+//: \param:   TODO
+//: ----------------------------------------------------------------------------
+int32_t t_hurl::subr_start(void)
+{
+        //NDBG_PRINT("l_subr label: %s --HOST: %s\n", a_subr.get_label().c_str(), a_subr.get_host().c_str());
+        // Only run on resolved
+        int32_t l_s;
+        //std::string l_error;
+
+        // Try get idle from proxy pool
+        ns_hlx::nconn *l_nconn = NULL;
+        // try get from idle list
+
+        if(m_idle_nconn_list.empty() ||
+           (m_idle_nconn_list.front() == NULL))
+        {
+                l_nconn = create_new_nconn();
+        }
+        else
+        {
+                l_nconn = m_idle_nconn_list.front();
+                m_idle_nconn_list.pop_front();
+        }
+        if(!l_nconn)
+        {
+                // TODO fatal???
+                return HLX_STATUS_ERROR;
+        }
 
         // Reset stats
         l_nconn->reset_stats();
@@ -1280,11 +1338,9 @@ int32_t t_hurl::subr_try_start(void)
         l_ses->m_t_hurl = this;
         l_ses->m_timer_obj = NULL;
 
-        // Setup nconn
-        l_nconn->set_data(l_ses);
-        l_nconn->set_evr_loop(m_evr_loop);
         // Setup clnt_session
         l_ses->m_nconn = l_nconn;
+        l_nconn->set_data(l_ses);
         l_ses->m_subr = &m_subr;
 
         // Assign clnt_session
@@ -1352,12 +1408,14 @@ int32_t t_hurl::subr_try_start(void)
         // ---------------------------------------
 #if 0
         if(l_uss->m_rqst_resp_logging)
-        {
-                if(l_uss->m_rqst_resp_logging_color) TRC_OUTPUT("%s", ANSI_COLOR_FG_YELLOW);
-                l_uss->m_out_q->print();
-                if(l_uss->m_rqst_resp_logging_color) TRC_OUTPUT("%s", ANSI_COLOR_OFF);
-        }
 #endif
+        {
+                //if(l_uss->m_rqst_resp_logging_color)
+                TRC_OUTPUT("%s", ANSI_COLOR_FG_YELLOW);
+                l_ses->m_out_q->print();
+                //if(l_uss->m_rqst_resp_logging_color)
+                TRC_OUTPUT("%s", ANSI_COLOR_OFF);
+        }
 
         // ---------------------------------------
         // stats
@@ -1450,12 +1508,12 @@ int32_t t_hurl::cleanup_session(session *a_ses, ns_hlx::nconn *a_nconn)
         return HLX_STATUS_OK;
 }
 
-#if 0
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
+#if 0
 bool subr::get_is_done(void) const
 {
         if((m_num_to_request < 0) || m_num_completed < (uint32_t)m_num_to_request)
@@ -1467,12 +1525,14 @@ bool subr::get_is_done(void) const
                 return true;
         }
 }
+#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
+#if 0
 bool subr::get_is_pending_done(void) const
 {
         if((m_num_to_request < 0) || m_num_requested < (uint32_t)m_num_to_request)
@@ -1484,12 +1544,14 @@ bool subr::get_is_pending_done(void) const
                 return true;
         }
 }
+#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
+#if 0
 bool subr::get_is_multipath(void) const
 {
         return m_is_multipath;
@@ -1501,30 +1563,26 @@ bool subr::get_is_multipath(void) const
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
 static int32_t s_completion_cb(ns_hlx::subr &a_subr,
                                ns_hlx::nconn &a_nconn,
                                ns_hlx::resp &a_resp)
 {
-        if(g_test_finished)
-        {
-                a_subr.set_num_to_request(0);
-        }
         pthread_mutex_lock(&g_completion_mutex);
         ++g_num_completed;
         pthread_mutex_unlock(&g_completion_mutex);
+#if 0
         if((g_num_to_request != -1) && (g_num_completed >= (uint64_t)g_num_to_request))
         {
                 g_test_finished = true;
                 return 0;
         }
+#endif
         if(g_rate_delta_us && !g_test_finished)
         {
                 usleep(g_rate_delta_us*g_num_threads);
         }
         return 0;
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
@@ -2126,8 +2184,11 @@ int main(int argc, char** argv)
 #endif
 
         // Suppress errors
-        ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_ALL);
-        ns_hlx::trc_out_file_open("/dev/stdout");
+        ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_NONE);
+
+        // Log all packets
+        //ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_ALL);
+        //ns_hlx::trc_out_file_open("/dev/stdout");
 
         // For sighandler
         settings_struct_t l_settings;
@@ -2757,9 +2818,7 @@ int main(int argc, char** argv)
                 printf("Error: performing init_with_url: %s\n", l_url.c_str());
                 return HLX_STATUS_ERROR;
         }
-#if 0
         l_subr->set_completion_cb(s_completion_cb);
-#endif
 
         // -------------------------------------------
         // Paths...
