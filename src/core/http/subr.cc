@@ -26,7 +26,10 @@
 //: ----------------------------------------------------------------------------
 #include "nconn_tcp.h"
 #include "ndebug.h"
+#include "nresolver.h"
 #include "t_srvr.h"
+#include "hlx/ups_srvr_session.h"
+#include "hlx/clnt_session.h"
 #include "hlx/string_util.h"
 #include "hlx/subr.h"
 #include "hlx/api_resp.h"

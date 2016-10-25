@@ -188,6 +188,7 @@ static bool g_color = false;
 static uint64_t g_rate_delta_us = 0;
 static uint32_t g_num_threads = 1;
 static int64_t g_num_to_request = -1;
+static int64_t g_reqs_per_conn = -1;
 static std::string g_cipher_str_list;
 static t_hurl_list_t g_t_hurl_list;
 static bool g_stats = true;
@@ -820,6 +821,7 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                            l_ses->m_resp->m_complete)
                         {
                                 // Cancel timer
+                                l_nconn->bump_num_requested();
                                 l_ses->cancel_timer(l_ses->m_timer_obj);
                                 // TODO Check status
                                 l_ses->m_timer_obj = NULL;
@@ -1091,7 +1093,7 @@ ns_hlx::nconn *t_hurl::create_new_nconn(void)
                 return NULL;
         }
         l_nconn->set_ctx(this);
-        l_nconn->set_num_reqs_per_conn(-1);
+        l_nconn->set_num_reqs_per_conn(g_reqs_per_conn);
         l_nconn->set_collect_stats(false);
         l_nconn->set_connect_only(false);
         l_nconn->set_evr_loop(m_evr_loop);
@@ -1273,45 +1275,16 @@ int32_t t_hurl::cleanup_session(session *a_ses, ns_hlx::nconn *a_nconn)
                 // Cancel last timer
                 cancel_timer(a_uss->m_timer_obj);
                 a_uss->m_timer_obj = NULL;
-
-                a_uss->m_nconn = NULL;
-                if(a_uss->m_resp)
-                {
-                        m_resp_pool.release(a_uss->m_resp);
-                        a_uss->m_resp = NULL;
-                }
-                if(a_uss->m_in_q)
-                {
-                        if(!a_uss->m_in_q_detached)
-                        {
-                                release_nbq(a_uss->m_in_q);
-                        }
-                        a_uss->m_in_q = NULL;
-                }
-                if(a_uss->m_out_q)
-                {
-                        release_nbq(a_uss->m_out_q);
-                        a_uss->m_out_q = NULL;
-                }
-                a_uss->clear();
-                m_ups_srvr_session_pool.release(a_uss);
 #endif
+                if(a_ses->m_t_hurl)
+                {
+                        a_ses->m_nconn = NULL;
+                        a_ses->m_t_hurl->m_session_pool.release(a_ses);
+                }
         }
         if(a_nconn)
         {
-#if 0
-                uint32_t l_id = a_nconn->get_pool_id();
-                if(l_id == S_POOL_ID_UPS_PROXY)
-                {
-                        ++m_stat.m_upsv_conn_completed;
-                        if(HLX_STATUS_OK != m_nconn_proxy_pool.release(a_nconn))
-                        {
-                                return HLX_STATUS_ERROR;
-                        }
-                        m_stat.m_pool_proxy_conn_active = m_nconn_proxy_pool.get_active_size();
-                        m_stat.m_pool_proxy_conn_idle = m_nconn_proxy_pool.get_idle_size();
-                }
-#endif
+                delete a_nconn;
                 // TODO Log error???
         }
         return HLX_STATUS_OK;
@@ -2080,7 +2053,6 @@ int main(int argc, char** argv)
         results_scheme_t l_results_scheme = RESULTS_SCHEME_STD;
 
         // TODO Make default definitions
-        int l_max_reqs_per_conn = 1;
         bool l_input_flag = false;
         bool l_wildcarding = true;
         std::string l_output_file = "";
@@ -2320,13 +2292,14 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'N':
                 {
-                        l_max_reqs_per_conn = atoi(optarg);
-                        if(l_max_reqs_per_conn < 1)
+                        int l_val = atoi(optarg);
+                        if(l_val < 1)
                         {
                                 printf("Error num-calls must be at least 1");
                                 return HLX_STATUS_ERROR;
                         }
-                        if (l_max_reqs_per_conn == 1)
+                        g_reqs_per_conn = l_val;
+                        if (g_reqs_per_conn == 1)
                         {
                                 l_subr->set_keepalive(false);
                         }
@@ -2664,15 +2637,15 @@ int main(int argc, char** argv)
         // Message
         if(!g_quiet && !g_verbose)
         {
-                if(l_max_reqs_per_conn < 0)
+                if(g_reqs_per_conn < 0)
                 {
                         fprintf(stdout, "Running %d threads %d parallel connections per thread with infinite requests per connection\n",
                                 g_num_threads, g_num_parallel);
                 }
                 else
                 {
-                        fprintf(stdout, "Running %d threads %d parallel connections per thread with %d requests per connection\n",
-                                        g_num_threads, g_num_parallel, l_max_reqs_per_conn);
+                        fprintf(stdout, "Running %d threads %d parallel connections per thread with %ld requests per connection\n",
+                                        g_num_threads, g_num_parallel, g_reqs_per_conn);
                 }
         }
 
