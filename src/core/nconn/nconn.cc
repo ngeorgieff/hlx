@@ -548,7 +548,6 @@ nconn::nconn(void):
       m_connect_only(false),
       m_remote_sa(),
       m_remote_sa_len(0),
-      m_pre_connect_cb(NULL),
       m_nc_state(NC_STATE_FREE),
       m_id(0),
       m_idx(0),

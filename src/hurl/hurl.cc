@@ -126,6 +126,18 @@
                 }\
         } while(0);
 
+#define T_HLX_SET_NCONN_OPT(_conn, _opt, _buf, _len) \
+        do { \
+                int _status = 0; \
+                _status = _conn.set_opt((_opt), (_buf), (_len)); \
+                if (_status != nconn::NC_STATUS_OK) { \
+                        TRC_ERROR("set_opt %d.  Status: %d.\n", \
+                                   _opt, _status); \
+                        m_nconn_proxy_pool.release(&_conn); \
+                        return HLX_STATUS_ERROR;\
+                } \
+        } while(0)
+
 //: ----------------------------------------------------------------------------
 //: Enums
 //: ----------------------------------------------------------------------------
@@ -176,12 +188,13 @@ static bool g_color = false;
 static uint64_t g_rate_delta_us = 0;
 static uint32_t g_num_threads = 1;
 static int64_t g_num_to_request = -1;
-
+static std::string g_cipher_str_list;
 static t_hurl_list_t g_t_hurl_list;
 static bool g_stats = true;
 static bool g_quiet = false;
 static bool g_show_response_codes = false;
 static bool g_show_per_interval = true;
+static bool g_multipath = false;
 static uint32_t g_interval_ms = 500;
 static uint32_t g_num_parallel = 100;
 static uint64_t g_start_time_ms = 0;
@@ -197,13 +210,6 @@ static uint32_t g_path_vector_last_idx = 0;
 static path_order_t g_path_order = EXPLODED_PATH_ORDER_RANDOM;
 static pthread_mutex_t g_path_vector_mutex;
 static pthread_mutex_t g_completion_mutex;
-
-// -----------------------------------------------
-// Address rotation
-// -----------------------------------------------
-//static uint32_t g_addrx_addr_ipv4 = LOCAL_ADDR_V4_MIN;
-static uint32_t g_addrx_addr_ipv4_max = LOCAL_ADDR_V4_MAX;
-static pthread_mutex_t g_addrx_mutex;
 
 //: ----------------------------------------------------------------------------
 //: Prototypes
@@ -226,6 +232,7 @@ void get_results_json(double a_elapsed_time,
                       std::string &ao_results);
 
 int32_t read_file(const char *a_file, char **a_buf, uint32_t *a_len);
+static int32_t s_create_request(ns_hlx::subr &a_subr, ns_hlx::nbq &a_nbq);
 
 //: ----------------------------------------------------------------------------
 //: \details: sighandler
@@ -793,20 +800,12 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 l_in_q->reset_write();
                         }
                 }
-                // TODO REMOVE
-                if(l_s == ns_hlx::nconn::NC_STATUS_ERROR)
-                {
-                        NDBG_PRINT("%sERROR%s:\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
-                }
                 if(!l_ses ||
                    !l_ses->m_subr ||
                    (l_s == ns_hlx::nconn::NC_STATUS_EOF) ||
                    (l_s == ns_hlx::nconn::NC_STATUS_ERROR) ||
                    l_nconn->is_done())
                 {
-                        //NDBG_PRINT("l_ses->m_subr:      %p\n", l_ses->m_subr);
-                        //NDBG_PRINT("l_nconn->is_done(): %d\n", l_nconn->is_done());
-                        //NDBG_PRINT("goto check_conn_status\n");
                         goto check_conn_status;
                 }
                 // -----------------------------------------
@@ -817,13 +816,6 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                         // -----------------------------------------
                         // Handle completion
                         // -----------------------------------------
-                        //NDBG_PRINT("l_ses:                     %p\n", l_ses);
-                        //if(l_ses){
-                        //NDBG_PRINT("l_ses->m_resp:             %p\n", l_ses->m_resp);
-                        //if(l_ses->m_resp){
-                        //NDBG_PRINT("l_ses->m_resp->m_complete: %d\n", l_ses->m_resp->m_complete);
-                        //}
-                        //}
                         if(l_ses->m_resp &&
                            l_ses->m_resp->m_complete)
                         {
@@ -864,10 +856,6 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 bool l_nconn_can_reuse = l_nconn->can_reuse();
                                 bool l_keepalive = l_ses->m_subr->get_keepalive();
                                 bool l_complete = l_ses->subr_complete();
-                                //NDBG_PRINT("l_complete:        %d\n", l_complete);
-                                //NDBG_PRINT("l_nconn_can_reuse: %d\n", l_nconn_can_reuse);
-                                //NDBG_PRINT("l_keepalive:       %d\n", l_keepalive);
-                                //NDBG_PRINT("l_hmsg_keep_alive: %d\n", l_hmsg_keep_alive);
                                 if(l_complete ||
                                   (!l_nconn_can_reuse ||
                                    !l_keepalive ||
@@ -1090,9 +1078,6 @@ int32_t t_hurl::subr_dequeue(void)
 ns_hlx::nconn *t_hurl::create_new_nconn(void)
 {
         ns_hlx::nconn *l_nconn = NULL;
-        // ---------------------------------------
-        // setup connection
-        // ---------------------------------------
         if(m_subr.get_scheme() == ns_hlx::SCHEME_TLS)
         {
                 l_nconn = new ns_hlx::nconn_tls();
@@ -1113,38 +1098,6 @@ ns_hlx::nconn *t_hurl::create_new_nconn(void)
         l_nconn->setup_evr_fd(session::evr_fd_readable_cb,
                               session::evr_fd_writeable_cb,
                               session::evr_fd_error_cb);
-
-#if 0
-        T_HLX_SET_NCONN_OPT((*l_nconn),nconn_tcp::OPT_TCP_RECV_BUF_SIZE,NULL,m_t_conf->m_sock_opt_recv_buf_size);
-        T_HLX_SET_NCONN_OPT((*l_nconn),nconn_tcp::OPT_TCP_SEND_BUF_SIZE,NULL,m_t_conf->m_sock_opt_send_buf_size);
-        T_HLX_SET_NCONN_OPT((*l_nconn),nconn_tcp::OPT_TCP_NO_DELAY,NULL,m_t_conf->m_sock_opt_no_delay);
-#endif
-
-        if(l_nconn->get_scheme() == ns_hlx::SCHEME_TLS)
-        {
-#if 0
-                T_HLX_SET_NCONN_OPT((*l_nconn),nconn_tls::OPT_TLS_CIPHER_STR,m_t_conf->m_tls_client_ctx_cipher_list.c_str(),m_t_conf->m_tls_client_ctx_cipher_list.length());
-                T_HLX_SET_NCONN_OPT((*l_nconn),nconn_tls::OPT_TLS_CTX,m_t_conf->m_tls_client_ctx,sizeof(m_t_conf->m_tls_client_ctx));
-                bool l_val;
-                l_val = a_subr.get_tls_verify();
-                T_HLX_SET_NCONN_OPT((*l_nconn), nconn_tls::OPT_TLS_VERIFY, &(l_val), sizeof(bool));
-                l_val = a_subr.get_tls_self_ok();
-                T_HLX_SET_NCONN_OPT((*l_nconn), nconn_tls::OPT_TLS_VERIFY_ALLOW_SELF_SIGNED, &(l_val), sizeof(bool));
-                l_val = a_subr.get_tls_no_host_check();
-                T_HLX_SET_NCONN_OPT((*l_nconn), nconn_tls::OPT_TLS_VERIFY_NO_HOST_CHECK, &(l_val), sizeof(bool));
-                l_val = a_subr.get_tls_sni();
-                T_HLX_SET_NCONN_OPT((*l_nconn), nconn_tls::OPT_TLS_SNI, &(l_val), sizeof(bool));
-                if(!a_subr.get_hostname().empty())
-                {
-                        T_HLX_SET_NCONN_OPT((*l_nconn), nconn_tls::OPT_TLS_HOSTNAME, a_subr.get_hostname().c_str(), a_subr.get_hostname().length());
-                }
-                else
-                {
-                        T_HLX_SET_NCONN_OPT((*l_nconn), nconn_tls::OPT_TLS_HOSTNAME, a_subr.get_host().c_str(), a_subr.get_host().length());
-                }
-#endif
-        }
-
         l_nconn->set_host_info(m_subr.get_host_info());
         return l_nconn;
 }
@@ -1190,6 +1143,7 @@ int32_t t_hurl::subr_start(void)
         // setup session
         // ---------------------------------------
         session *l_ses = NULL;
+        bool l_ses_reused = false;
         l_ses = m_session_pool.get_free();
         if(!l_ses)
         {
@@ -1198,6 +1152,7 @@ int32_t t_hurl::subr_start(void)
         }
         else
         {
+                l_ses_reused = true;
                 //NDBG_PRINT("%sREUSE_SESSION%s\n", ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF);
         }
         //NDBG_PRINT("Adding http_data: %p.\n", l_clnt_session);
@@ -1230,7 +1185,7 @@ int32_t t_hurl::subr_start(void)
         // setup q's
         if(!l_ses->m_in_q)
         {
-                l_ses->m_in_q = new ns_hlx::nbq(8192);
+                l_ses->m_in_q = new ns_hlx::nbq(8*1024);
                 l_ses->m_resp->set_q(l_ses->m_in_q);
         }
         else
@@ -1239,18 +1194,29 @@ int32_t t_hurl::subr_start(void)
         }
         if(!l_ses->m_out_q)
         {
-                l_ses->m_out_q = new ns_hlx::nbq(8192);
+                l_ses->m_out_q = new ns_hlx::nbq(8*1024);
         }
         else
         {
-                l_ses->m_out_q->reset_write();
+                if(l_ses_reused && !g_multipath)
+                {
+                        l_ses->m_out_q->reset_read();
+                }
+                else
+                {
+                        l_ses->m_out_q->reset_write();
+                }
         }
         // create request
-        l_s = ns_hlx::subr::create_request(m_subr, *(l_ses->m_out_q));
-        if(HLX_STATUS_OK != l_s)
+        if(!l_ses_reused || g_multipath)
         {
-                return session::evr_fd_error_cb(l_nconn);
+                l_s = s_create_request(m_subr, *(l_ses->m_out_q));
+                if(HLX_STATUS_OK != l_s)
+                {
+                        return session::evr_fd_error_cb(l_nconn);
+                }
         }
+
         // stats
         ++m_stat.m_upsv_reqs;
 
@@ -1804,20 +1770,8 @@ const std::string &get_path(void *a_rand)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
-static int32_t s_create_request_cb(ns_hlx::subr &a_subr, ns_hlx::nbq &a_nbq)
+static int32_t s_create_request(ns_hlx::subr &a_subr, ns_hlx::nbq &a_nbq)
 {
-        pthread_mutex_lock(&g_completion_mutex);
-        if(g_test_finished ||
-           ((g_num_to_request != -1) &&
-            (g_num_requested >= (uint32_t)g_num_to_request)))
-        {
-                pthread_mutex_unlock(&g_completion_mutex);
-                return HLX_STATUS_ERROR;
-        }
-        ++g_num_requested;
-        pthread_mutex_unlock(&g_completion_mutex);
-
         // TODO grab from path...
         std::string l_path_ref = get_path(g_rand_ptr);
 
@@ -1888,7 +1842,6 @@ static int32_t s_create_request_cb(ns_hlx::subr &a_subr, ns_hlx::nbq &a_nbq)
 
         return HLX_STATUS_OK;
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: Command
@@ -2079,7 +2032,6 @@ void print_usage(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "  -d, --data           HTTP body data -supports curl style @ file specifier\n");
         fprintf(a_stream, "  \n");
         fprintf(a_stream, "Settings:\n");
-        fprintf(a_stream, "  -y, --cipher         Cipher --see \"openssl ciphers\" for list.\n");
         fprintf(a_stream, "  -p, --parallel       Num parallel. Default: 100.\n");
         fprintf(a_stream, "  -f, --fetches        Num fetches.\n");
         fprintf(a_stream, "  -N, --num_calls      Number of requests per connection\n");
@@ -2088,12 +2040,8 @@ void print_usage(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "  -X, --verb           Request command -HTTP verb to use -GET/PUT/etc. Default GET\n");
         fprintf(a_stream, "  -l, --seconds        Run for <N> seconds .\n");
         fprintf(a_stream, "  -A, --rate           Max Request Rate.\n");
-        fprintf(a_stream, "  -R, --recv_buffer    Socket receive buffer size.\n");
-        fprintf(a_stream, "  -S, --send_buffer    Socket send buffer size.\n");
-        fprintf(a_stream, "  -D, --no_delay       Disable socket TCP no-delay (on by default).\n");
         fprintf(a_stream, "  -T, --timeout        Timeout (seconds).\n");
         fprintf(a_stream, "  -x, --no_stats       Don't collect stats -faster.\n");
-        fprintf(a_stream, "  -r, --addr_seq       Rotate through local addresses (number).\n");
         fprintf(a_stream, "  \n");
         fprintf(a_stream, "Print Options:\n");
         fprintf(a_stream, "  -v, --verbose        Verbose logging\n");
@@ -2144,17 +2092,6 @@ int main(int argc, char** argv)
         //ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_ALL);
         //ns_hlx::trc_out_file_open("/dev/stdout");
 
-        // hurl settings
-#if 0
-        l_srvr->set_collect_stats(true);
-        l_srvr->set_count_response_status(true);
-        l_srvr->set_num_threads(l_max_threads);
-        l_srvr->set_num_parallel(l_num_parallel);
-        l_srvr->set_num_reqs_per_conn(-1);
-        l_srvr->set_update_stats_ms(g_interval_ms);
-        l_srvr->set_sock_opt_no_delay(true);
-#endif
-
         if(isatty(fileno(stdout)))
         {
                 g_color = true;
@@ -2171,10 +2108,6 @@ int main(int argc, char** argv)
         l_subr->set_header("User-Agent","hurl Server Load Tester");
         l_subr->set_header("Accept","*/*");
         l_subr->set_keepalive(true);
-
-#if 0
-        l_subr->set_create_req_cb(s_create_request_cb);
-#endif
         //l_subr->set_num_reqs_per_conn(1);
 
         // Initialize rand...
@@ -2199,7 +2132,6 @@ int main(int argc, char** argv)
                 { "version",        0, 0, 'V' },
                 { "no_wildcards",   0, 0, 'w' },
                 { "data",           1, 0, 'd' },
-                { "cipher",         1, 0, 'y' },
                 { "parallel",       1, 0, 'p' },
                 { "fetches",        1, 0, 'f' },
                 { "num_calls",      1, 0, 'N' },
@@ -2209,12 +2141,8 @@ int main(int argc, char** argv)
                 { "rate",           1, 0, 'A' },
                 { "mode",           1, 0, 'M' },
                 { "seconds",        1, 0, 'l' },
-                { "recv_buffer",    1, 0, 'R' },
-                { "send_buffer",    1, 0, 'S' },
-                { "no_delay",       0, 0, 'D' },
                 { "timeout",        1, 0, 'T' },
                 { "no_stats",       0, 0, 'x' },
-                { "addr_seq",       1, 0, 'r' },
                 { "verbose",        0, 0, 'v' },
                 { "no_color",       0, 0, 'c' },
                 { "quiet",          0, 0, 'q' },
@@ -2225,7 +2153,6 @@ int main(int argc, char** argv)
                 { "http_load_line", 0, 0, 'Z' },
                 { "output",         1, 0, 'o' },
                 { "update",         1, 0, 'U' },
-                { "data_port",      1, 0, 'P' },
 #ifdef ENABLE_PROFILER
                 { "gprofile",       1, 0, 'G' },
 #endif
@@ -2267,9 +2194,9 @@ int main(int argc, char** argv)
         }
 
 #ifdef ENABLE_PROFILER
-        char l_short_arg_list[] = "hVwd:y:p:f:N:t:H:X:A:M:l:R:S:DT:xr:vcqCLjYZo:P:U:G:";
+        char l_short_arg_list[] = "hVwd:p:f:N:t:H:X:A:M:l:T:xvcqCLjYZo:U:G:";
 #else
-        char l_short_arg_list[] = "hVwd:y:p:f:N:t:H:X:A:M:l:R:S:DT:xr:vcqCLjYZo:P:U:";
+        char l_short_arg_list[] = "hVwd:p:f:N:t:H:X:A:M:l:T:xvcqCLjYZo:U:";
 #endif
 
         while ((l_opt = getopt_long_only(argc, argv, l_short_arg_list, l_long_options, &l_option_index)) != -1 && ((unsigned char)l_opt != 255))
@@ -2357,9 +2284,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'y':
                 {
-#if 0
-                        l_srvr->set_tls_client_ctx_cipher_list(l_arg);
-#endif
+                        g_cipher_str_list = l_arg;
                         break;
                 }
                 // ---------------------------------------
@@ -2510,40 +2435,6 @@ int main(int argc, char** argv)
                         break;
                 }
                 // ---------------------------------------
-                // sock_opt_recv_buf_size
-                // ---------------------------------------
-                case 'R':
-                {
-#if 0
-                        int l_sock_opt_recv_buf_size = atoi(optarg);
-                        // TODO Check value...
-                        l_srvr->set_sock_opt_recv_buf_size(l_sock_opt_recv_buf_size);
-#endif
-                        break;
-                }
-                // ---------------------------------------
-                // sock_opt_send_buf_size
-                // ---------------------------------------
-                case 'S':
-                {
-#if 0
-                        int l_sock_opt_send_buf_size = atoi(optarg);
-                        // TODO Check value...
-                        l_srvr->set_sock_opt_send_buf_size(l_sock_opt_send_buf_size);
-#endif
-                        break;
-                }
-                // ---------------------------------------
-                // No delay
-                // ---------------------------------------
-                case 'D':
-                {
-#if 0
-                        l_srvr->set_sock_opt_no_delay(false);
-#endif
-                        break;
-                }
-                // ---------------------------------------
                 // timeout
                 // ---------------------------------------
                 case 'T':
@@ -2566,26 +2457,6 @@ int main(int argc, char** argv)
                 case 'x':
                 {
                         g_stats = false;
-                        break;
-                }
-                // ---------------------------------------
-                // Rotate local address
-                // ---------------------------------------
-                case 'r':
-                {
-                        pthread_mutex_init(&g_addrx_mutex, NULL);
-                        // Get value
-                        int l_num = atoi(optarg);
-                        if ((l_num < 1) || (l_num > (LOCAL_ADDR_V4_MAX - LOCAL_ADDR_V4_MIN)))
-                        {
-                                printf("timeout must be > 0 and less than local addr range: 127.0.0.0/8\n");
-                                //print_usage(stdout, -1);
-                                return HLX_STATUS_ERROR;
-                        }
-                        g_addrx_addr_ipv4_max = LOCAL_ADDR_V4_MIN + l_num;
-#if 0
-                        l_subr->set_pre_connect_cb(s_pre_connect_cb);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -2772,16 +2643,10 @@ int main(int argc, char** argv)
                         printf("Error performing special_effects_parse with path: %s\n", l_raw_path.c_str());
                         return HLX_STATUS_ERROR;
                 }
-#if 0
                 if(g_path_vector.size() > 1)
                 {
-                        l_subr->set_is_multipath(true);
+                        g_multipath = true;
                 }
-                else
-                {
-                        l_subr->set_is_multipath(false);
-                }
-#endif
         }
         else
         {

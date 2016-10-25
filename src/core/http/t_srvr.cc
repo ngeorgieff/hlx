@@ -824,7 +824,7 @@ int32_t t_srvr::subr_try_start(subr &a_subr)
         // ---------------------------------------
         // create request
         // ---------------------------------------
-        l_status = subr::create_request(a_subr, *(l_uss->m_out_q));
+        l_status = a_subr.create_request(*(l_uss->m_out_q));
         if(HLX_STATUS_OK != l_status)
         {
                 return ups_srvr_session::evr_fd_error_cb(l_nconn);

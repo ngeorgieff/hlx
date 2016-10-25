@@ -1243,9 +1243,9 @@ int32_t subr::cancel(void)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-int32_t subr::create_request(subr &a_subr, nbq &ao_q)
+int32_t subr::create_request(nbq &ao_q)
 {
-        std::string l_path_ref = a_subr.get_path();
+        std::string l_path_ref = get_path();
 
         char l_buf[2048];
         int32_t l_len = 0;
@@ -1253,14 +1253,14 @@ int32_t subr::create_request(subr &a_subr, nbq &ao_q)
         {
                 l_path_ref = "/";
         }
-        if(!(a_subr.get_query().empty()))
+        if(!(get_query().empty()))
         {
                 l_path_ref += "?";
-                l_path_ref += a_subr.get_query();
+                l_path_ref += get_query();
         }
         //NDBG_PRINT("HOST: %s PATH: %s\n", a_reqlet.m_url.m_host.c_str(), l_path_ref.c_str());
         l_len = snprintf(l_buf, sizeof(l_buf),
-                        "%s %.500s HTTP/1.1", a_subr.get_verb().c_str(), l_path_ref.c_str());
+                        "%s %.500s HTTP/1.1", get_verb().c_str(), l_path_ref.c_str());
 
         nbq_write_request_line(ao_q, l_buf, l_len);
 
@@ -1271,8 +1271,8 @@ int32_t subr::create_request(subr &a_subr, nbq &ao_q)
         bool l_specd_ua = false;
 
         // Loop over header map
-        for(kv_map_list_t::const_iterator i_hl = a_subr.get_headers().begin();
-            i_hl != a_subr.get_headers().end();
+        for(kv_map_list_t::const_iterator i_hl = get_headers().begin();
+            i_hl != get_headers().end();
             ++i_hl)
         {
                 if(i_hl->first.empty() || i_hl->second.empty())
@@ -1302,7 +1302,7 @@ int32_t subr::create_request(subr &a_subr, nbq &ao_q)
         if (!l_specd_host)
         {
                 nbq_write_header(ao_q, "Host", strlen("Host"),
-                                 a_subr.get_host().c_str(), a_subr.get_host().length());
+                                 get_host().c_str(), get_host().length());
         }
 
         // -------------------------------------------
@@ -1310,11 +1310,11 @@ int32_t subr::create_request(subr &a_subr, nbq &ao_q)
         // -------------------------------------------
         if (!l_specd_ua)
         {
-                if(!a_subr.m_t_srvr->get_srvr())
+                if(!m_t_srvr->get_srvr())
                 {
                         return HLX_STATUS_ERROR;
                 }
-                const std::string &l_ua = a_subr.m_t_srvr->get_srvr()->get_server_name();
+                const std::string &l_ua = m_t_srvr->get_srvr()->get_server_name();
                 nbq_write_header(ao_q, "User-Agent", strlen("User-Agent"),
                                 l_ua.c_str(), l_ua.length());
         }
@@ -1322,16 +1322,15 @@ int32_t subr::create_request(subr &a_subr, nbq &ao_q)
         // -------------------------------------------
         // body
         // -------------------------------------------
-        if(a_subr.get_body_data() && a_subr.get_body_len())
+        if(get_body_data() && get_body_len())
         {
                 //NDBG_PRINT("Write: buf: %p len: %d\n", l_buf, l_len);
-                nbq_write_body(ao_q, a_subr.get_body_data(), a_subr.get_body_len());
+                nbq_write_body(ao_q, get_body_data(), get_body_len());
         }
         else
         {
                 nbq_write_body(ao_q, NULL, 0);
         }
-
         return HLX_STATUS_OK;
 }
 

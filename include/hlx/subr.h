@@ -123,7 +123,6 @@ public:
         void set_scheme(scheme_t a_scheme);
         void set_save(bool a_val);
         void set_connect_only(bool a_val);
-        void set_is_multipath(bool a_val);
         void set_num_to_request(int32_t a_val);
         void set_max_parallel(int32_t a_val);
         void set_keepalive(bool a_val);
@@ -179,13 +178,11 @@ public:
         // Initialize
         int32_t init_with_url(const std::string &a_url);
 
+        // Create request
+        int32_t create_request(nbq &ao_q);
+
         // Cancel
         int32_t cancel(void);
-
-        // -------------------------------------------------
-        // Public static methods
-        // -------------------------------------------------
-        static int32_t create_request(subr &a_subr, nbq &ao_q);
 
 private:
         // -------------------------------------------------
