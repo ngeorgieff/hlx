@@ -35,6 +35,7 @@
 #include "hlx/evr.h"
 #include "hlx/resp.h"
 #include "hlx/nbq.h"
+#include "hlx/time_util.h"
 
 #include "tinymt64.h"
 #include "nlookup.h"
@@ -175,11 +176,10 @@ static bool g_color = false;
 static uint64_t g_rate_delta_us = 0;
 static uint32_t g_num_threads = 1;
 static int64_t g_num_to_request = -1;
-//static uint64_t g_num_requested = 0;
-//static uint64_t g_num_completed = 0;
 
 static t_hurl_list_t g_t_hurl_list;
-static bool g_quiet =  false;
+static bool g_stats = true;
+static bool g_quiet = false;
 static bool g_show_response_codes = false;
 static bool g_show_per_interval = true;
 static uint32_t g_interval_ms = 500;
@@ -510,7 +510,7 @@ bool session::subr_complete(void)
         }
         bool l_complete = false;
 #if 0
-        m_subr->set_end_time_ms(get_time_ms());
+        m_subr->set_end_time_ms(ns_hlx::get_time_ms());
 #endif
         // Get vars -completion -can delete subr object
         bool l_connect_only = m_subr->get_connect_only();
@@ -541,10 +541,10 @@ int32_t session::subr_error(ns_hlx::http_status_t a_status)
                 return HLX_STATUS_ERROR;
         }
 #if 0
-        m_subr->set_end_time_ms(get_time_ms());
+        m_subr->set_end_time_ms(ns_hlx::get_time_ms());
         if(m_nconn && m_nconn->get_collect_stats_flag())
         {
-                m_nconn->set_stat_tt_completion_us(get_delta_time_us(m_nconn->get_connect_start_time_us()));
+                m_nconn->set_stat_tt_completion_us(ns_hlx::get_delta_time_us(m_nconn->get_connect_start_time_us()));
                 m_nconn->reset_stats();
         }
 #endif
@@ -683,7 +683,7 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                         // timeout
                         // ---------------------------------
 #if 0
-                        uint64_t l_ct_ms = get_time_ms();
+                        uint64_t l_ct_ms = ns_hlx::get_time_ms();
                         if(((uint32_t)(l_ct_ms - l_uss->get_last_active_ms())) >= l_uss->get_timeout_ms())
                         {
                                 ++(l_t_srvr->m_stat.m_upsv_errors);
@@ -738,7 +738,7 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
         // set last active
         if(l_ses)
         {
-                l_uss->set_last_active_ms(get_time_ms());
+                l_uss->set_last_active_ms(ns_hlx::get_time_ms());
         }
 #endif
 
@@ -772,21 +772,26 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
         do {
                 uint32_t l_read = 0;
                 uint32_t l_written = 0;
+                //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): l_in_q: %p l_out_q: %p\n", a_conn_mode, l_in_q, l_out_q);
                 l_s = l_nconn->nc_run_state_machine(a_conn_mode, l_in_q, l_read, l_out_q, l_written);
-                //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d\n", a_conn_mode, l_s);
+                //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d read: %u l_written: %u\n", a_conn_mode, l_s, l_read, l_written);
                 if(l_t_hurl)
                 {
                         // TODO REMOVE
-                        if(l_read > 0 && (l_in_q == l_t_hurl->m_orphan_in_q))
-                        {
-                                NDBG_PRINT("%sERROR%s: READ WITH ORPHAN\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
-                        }
-                        if(l_written > 0 && (l_out_q == l_t_hurl->m_orphan_out_q))
-                        {
-                                NDBG_PRINT("%sERROR%s: WROTE WITH ORPHAN\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
-                        }
+                        //if(l_read > 0 && (l_in_q == l_t_hurl->m_orphan_in_q))
+                        //{
+                        //        NDBG_PRINT("%sERROR%s: READ WITH ORPHAN\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+                        //}
+                        //if(l_written > 0 && (l_out_q == l_t_hurl->m_orphan_out_q))
+                        //{
+                        //        NDBG_PRINT("%sERROR%s: WROTE WITH ORPHAN\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
+                        //}
                         l_t_hurl->m_stat.m_upsv_bytes_read += l_read;
                         l_t_hurl->m_stat.m_upsv_bytes_written += l_written;
+                        if(!g_verbose && (l_written > 0))
+                        {
+                                l_in_q->reset_write();
+                        }
                 }
                 // TODO REMOVE
                 if(l_s == ns_hlx::nconn::NC_STATUS_ERROR)
@@ -812,6 +817,13 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                         // -----------------------------------------
                         // Handle completion
                         // -----------------------------------------
+                        //NDBG_PRINT("l_ses:                     %p\n", l_ses);
+                        //if(l_ses){
+                        //NDBG_PRINT("l_ses->m_resp:             %p\n", l_ses->m_resp);
+                        //if(l_ses->m_resp){
+                        //NDBG_PRINT("l_ses->m_resp->m_complete: %d\n", l_ses->m_resp->m_complete);
+                        //}
+                        //}
                         if(l_ses->m_resp &&
                            l_ses->m_resp->m_complete)
                         {
@@ -835,13 +847,11 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 }
 
                                 // Get request time
-#if 0
-                                if(l_nconn->get_collect_stats_flag())
+                                if(g_stats)
                                 {
-                                        l_nconn->set_stat_tt_completion_us(get_delta_time_us(l_nconn->get_connect_start_time_us()));
-                                }
-#endif
+                                        l_nconn->set_stat_tt_completion_us(ns_hlx::get_delta_time_us(l_nconn->get_connect_start_time_us()));
 
+                                }
                                 if(l_ses->m_resp && l_t_hurl)
                                 {
                                         l_t_hurl->add_stat_to_agg(l_nconn->get_stats(), l_ses->m_resp->get_status());
@@ -854,10 +864,14 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 bool l_nconn_can_reuse = l_nconn->can_reuse();
                                 bool l_keepalive = l_ses->m_subr->get_keepalive();
                                 bool l_complete = l_ses->subr_complete();
+                                //NDBG_PRINT("l_complete:        %d\n", l_complete);
+                                //NDBG_PRINT("l_nconn_can_reuse: %d\n", l_nconn_can_reuse);
+                                //NDBG_PRINT("l_keepalive:       %d\n", l_keepalive);
+                                //NDBG_PRINT("l_hmsg_keep_alive: %d\n", l_hmsg_keep_alive);
                                 if(l_complete ||
-                                   !l_nconn_can_reuse ||
+                                  (!l_nconn_can_reuse ||
                                    !l_keepalive ||
-                                   !l_hmsg_keep_alive)
+                                   !l_hmsg_keep_alive))
                                 {
                                         l_s = ns_hlx::nconn::NC_STATUS_EOF;
                                         goto check_conn_status;
@@ -865,12 +879,15 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 // Give back rqst + in q
                                 if(l_t_hurl)
                                 {
+                                        l_ses->m_nconn = NULL;
                                         l_t_hurl->m_session_pool.release(l_ses);
                                         l_ses = NULL;
                                         l_in_q = l_t_hurl->m_orphan_in_q;
                                         l_out_q = l_t_hurl->m_orphan_out_q;
                                 }
                                 l_idle = true;
+                                //NDBG_PRINT("l_idle: %d\n", l_idle);
+                                goto idle_check;
                         }
                 }
                 // -----------------------------------------
@@ -950,8 +967,9 @@ check_conn_status:
         } while((l_s != ns_hlx::nconn::NC_STATUS_AGAIN) &&
                 (l_t_hurl->is_running()));
 
-        if((l_s == ns_hlx::nconn::NC_STATUS_AGAIN) &&
-           l_idle)
+idle_check:
+        //NDBG_PRINT("%sIDLE CONNECTION CHECK%s: l_idle: %d\n", ANSI_COLOR_BG_GREEN, ANSI_COLOR_OFF, l_idle);
+        if(l_idle)
         {
                 if(l_t_hurl)
                 {
@@ -981,9 +999,7 @@ void *t_hurl::t_run(void *a_nothing)
         }
         m_stopped = false;
         // Reset stats...
-#if 0
         m_stat.clear();
-#endif
 
 #if 0
         if(m_t_conf->m_update_stats_ms)
@@ -1000,7 +1016,7 @@ void *t_hurl::t_run(void *a_nothing)
 #if 0
         m_start_time_s = get_time_s();
         // TODO Test -remove
-        //uint64_t l_last_time_ms = get_time_ms();
+        //uint64_t l_last_time_ms = ns_hlx::get_time_ms();
         //uint64_t l_num_run = 0;
 #endif
 
@@ -1140,11 +1156,10 @@ ns_hlx::nconn *t_hurl::create_new_nconn(void)
 //: ----------------------------------------------------------------------------
 int32_t t_hurl::subr_start(void)
 {
-        //NDBG_PRINT("subr label: %s --HOST: %s\n", m_subr.get_label().c_str(), m_subr.get_host().c_str());
-        // Only run on resolved
+        //NDBG_PRINT("%ssubr label%s: %s --HOST: %s\n",
+        //                ANSI_COLOR_FG_RED, ANSI_COLOR_OFF,
+        //                m_subr.get_label().c_str(), m_subr.get_host().c_str());
         int32_t l_s;
-        //std::string l_error;
-
         // Try get idle from proxy pool
         ns_hlx::nconn *l_nconn = NULL;
         // try get from idle list
@@ -1153,6 +1168,7 @@ int32_t t_hurl::subr_start(void)
            (m_idle_nconn_list.front() == NULL))
         {
                 l_nconn = create_new_nconn();
+                //NDBG_PRINT("%sCREATING NEW CONNECTION%s\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
         }
         else
         {
@@ -1164,13 +1180,12 @@ int32_t t_hurl::subr_start(void)
                 // TODO fatal???
                 return HLX_STATUS_ERROR;
         }
-
         // Reset stats
-        l_nconn->reset_stats();
-
-        // stats
-        //++m_stat.m_upsv_conn_started;
-
+        if(g_stats)
+        {
+                l_nconn->set_collect_stats(g_stats);
+                l_nconn->reset_stats();
+        }
         // ---------------------------------------
         // setup session
         // ---------------------------------------
@@ -1181,6 +1196,10 @@ int32_t t_hurl::subr_start(void)
                 l_ses = new session();
                 m_session_pool.add(l_ses);
         }
+        else
+        {
+                //NDBG_PRINT("%sREUSE_SESSION%s\n", ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF);
+        }
         //NDBG_PRINT("Adding http_data: %p.\n", l_clnt_session);
         l_ses->m_t_hurl = this;
         l_ses->m_timer_obj = NULL;
@@ -1189,9 +1208,6 @@ int32_t t_hurl::subr_start(void)
         l_ses->m_nconn = l_nconn;
         l_nconn->set_data(l_ses);
         l_ses->m_subr = &m_subr;
-
-        // Assign clnt_session
-        //a_subr.set_ups_srvr_session(l_uss);
 
         // ---------------------------------------
         // setup resp
@@ -1204,17 +1220,14 @@ int32_t t_hurl::subr_start(void)
         if(!l_ses->m_resp)
         {
                 l_ses->m_resp = new ns_hlx::resp();
-                l_ses->m_resp->m_http_parser->data = l_ses->m_resp;
-                l_nconn->set_read_cb(ns_hlx::http_parse);
-                l_nconn->set_read_cb_data(l_ses->m_resp);
-                l_ses->m_resp->m_expect_resp_body_flag = m_subr.get_expect_resp_body_flag();
         }
-        //l_resp->init(m_subr.get_save());
         l_ses->m_resp->init(g_verbose);
+        l_ses->m_resp->m_http_parser->data = l_ses->m_resp;
+        l_nconn->set_read_cb(ns_hlx::http_parse);
+        l_nconn->set_read_cb_data(l_ses->m_resp);
+        l_ses->m_resp->m_expect_resp_body_flag = m_subr.get_expect_resp_body_flag();
 
-        // ---------------------------------------
         // setup q's
-        // ---------------------------------------
         if(!l_ses->m_in_q)
         {
                 l_ses->m_in_q = new ns_hlx::nbq(8192);
@@ -1232,38 +1245,22 @@ int32_t t_hurl::subr_start(void)
         {
                 l_ses->m_out_q->reset_write();
         }
-        // ---------------------------------------
         // create request
-        // ---------------------------------------
         l_s = ns_hlx::subr::create_request(m_subr, *(l_ses->m_out_q));
         if(HLX_STATUS_OK != l_s)
         {
                 return session::evr_fd_error_cb(l_nconn);
         }
-        // ---------------------------------------
-        // Display data from out q
-        // ---------------------------------------
-        if(g_verbose)
-        {
-                if(g_color) TRC_OUTPUT("%s", ANSI_COLOR_FG_YELLOW);
-                l_ses->m_out_q->print();
-                if(g_color) TRC_OUTPUT("%s", ANSI_COLOR_OFF);
-        }
-
-        // ---------------------------------------
         // stats
-        // ---------------------------------------
         ++m_stat.m_upsv_reqs;
-#if 0
-        a_subr.set_start_time_ms(get_time_ms());
-        if(l_nconn->get_collect_stats_flag())
-        {
-                l_nconn->set_request_start_time_us(get_time_us());
-        }
-#endif
 
+        if(g_stats)
+        {
+                m_subr.set_start_time_ms(ns_hlx::get_time_ms());
+                l_nconn->set_request_start_time_us(ns_hlx::get_time_us());
+        }
 #if 0
-        l_uss->set_last_active_ms(get_time_ms());
+        l_uss->set_last_active_ms(ns_hlx::get_time_ms());
         l_uss->set_timeout_ms(a_subr.get_timeout_ms());
 #endif
 
@@ -1282,6 +1279,15 @@ int32_t t_hurl::subr_start(void)
         }
 #endif
 
+        // ---------------------------------------
+        // Display data from out q
+        // ---------------------------------------
+        if(g_verbose)
+        {
+                if(g_color) TRC_OUTPUT("%s", ANSI_COLOR_FG_YELLOW);
+                l_ses->m_out_q->print();
+                if(g_color) TRC_OUTPUT("%s", ANSI_COLOR_OFF);
+        }
         // ---------------------------------------
         // start writing request
         // ---------------------------------------
@@ -1357,56 +1363,6 @@ void t_hurl::add_stat_to_agg(const ns_hlx::conn_stat_t &a_conn_stat, uint16_t a_
         update_stat(m_stat.m_upsv_stat_us_end_to_end, a_conn_stat.m_tt_completion_us);
         ++m_status_code_count_map[a_status_code];
 }
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-#if 0
-bool subr::get_is_done(void) const
-{
-        if((m_num_to_request < 0) || m_num_completed < (uint32_t)m_num_to_request)
-        {
-                return false;
-        }
-        else
-        {
-                return true;
-        }
-}
-#endif
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-#if 0
-bool subr::get_is_pending_done(void) const
-{
-        if((m_num_to_request < 0) || m_num_requested < (uint32_t)m_num_to_request)
-        {
-                return false;
-        }
-        else
-        {
-                return true;
-        }
-}
-#endif
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-#if 0
-bool subr::get_is_multipath(void) const
-{
-        return m_is_multipath;
-}
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: Completion callback
@@ -2609,9 +2565,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'x':
                 {
-#if 0
-                        l_srvr->set_collect_stats(false);
-#endif
+                        g_stats = false;
                         break;
                 }
                 // ---------------------------------------
@@ -2858,83 +2812,6 @@ int main(int argc, char** argv)
         }
 
         // -------------------------------------------
-        //
-        // -------------------------------------------
-#if 0
-        l_srvr->set_update_stats_ms(g_interval_ms);
-#endif
-
-        // -------------------------------------------
-        // Setup to run -but don't start
-        // -------------------------------------------
-#if 0
-        l_s = l_srvr->init_run();
-        if(HLX_STATUS_OK != l_s)
-        {
-                printf("Error: performing hlx::init_run\n");
-                return HLX_STATUS_ERROR;
-        }
-#endif
-
-        // -------------------------------------------
-        // Add subrequests
-        // -------------------------------------------
-#if 0
-        ns_hlx::srvr::t_srvr_list_t &l_t_srvr_list = l_srvr->get_t_srvr_list();
-        ns_hlx::subr_list_t l_subr_list;
-        uint32_t l_num_hlx = (uint32_t)l_t_srvr_list.size();
-        uint32_t i_hlx_idx = 0;
-        for(ns_hlx::srvr::t_srvr_list_t::iterator i_t = l_t_srvr_list.begin();
-            i_t != l_t_srvr_list.end();
-            ++i_t, ++i_hlx_idx)
-        {
-                if(!(*i_t))
-                {
-                        continue;
-                }
-                ns_hlx::subr *l_duped_subr = new ns_hlx::subr(*l_subr);
-                l_subr_list.push_back(l_duped_subr);
-                l_duped_subr->set_uid(l_srvr->get_next_subr_uuid());
-                // Recalculate num fetches per thread
-                if(l_duped_subr->get_num_to_request() > 0)
-                {
-                        uint32_t l_num_fetches_per_thread =
-                                        l_duped_subr->get_num_to_request() / l_num_hlx;
-                        uint32_t l_remainder_fetches =
-                                        l_duped_subr->get_num_to_request() % l_num_hlx;
-                        if (i_hlx_idx == (l_num_hlx - 1))
-                        {
-                                l_num_fetches_per_thread += l_remainder_fetches;
-                        }
-                        //NDBG_PRINT("Num to fetch: %d\n", (int)l_num_fetches_per_thread);
-                        l_duped_subr->set_num_to_request(l_num_fetches_per_thread);
-                }
-                if(l_duped_subr->get_num_to_request() != 0)
-                {
-                        //a_http_req.m_sr_child_list.push_back(&l_rqst);
-                        l_s = add_subr_t_srvr(*i_t, *l_duped_subr);
-                        if(l_s != HLX_STATUS_OK)
-                        {
-                                printf("Error: performing add_subr_t_srvr\n");
-                                return HLX_STATUS_ERROR;
-                        }
-                }
-        }
-        delete l_subr;
-#endif
-
-        // -------------------------------------------
-        // Start
-        // -------------------------------------------
-#if 0
-        l_s = l_srvr->run();
-        if(HLX_STATUS_OK != l_s)
-        {
-                printf("Error: performing hlx::run");
-                return HLX_STATUS_ERROR;
-        }
-#endif
-        // -------------------------------------------
         // resolve
         // -------------------------------------------
         ns_hlx::host_info l_host_info;
@@ -3005,11 +2882,6 @@ int main(int argc, char** argv)
         {
                 pthread_join(((*i_t)->m_t_run_thread), NULL);
         }
-
-#if 0
-        l_srvr->stop();
-        l_srvr->wait_till_stopped();
-#endif
 
 #ifdef ENABLE_PROFILER
         if (!l_gprof_file.empty())
@@ -3106,69 +2978,6 @@ int main(int argc, char** argv)
 }
 
 //: ----------------------------------------------------------------------------
-//: \details: Portable gettime function
-//: \return:  NA
-//: \param:   ao_timespec: struct timespec -with gettime result
-//: ----------------------------------------------------------------------------
-static void _rt_gettime(struct timespec &ao_timespec)
-{
-#ifdef __MACH__ // OS X does not have clock_gettime, use clock_get_time
-        clock_serv_t l_cclock;
-        mach_timespec_t l_mts;
-        host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &l_cclock);
-        clock_get_time(l_cclock, &l_mts);
-        mach_port_deallocate(mach_task_self(), l_cclock);
-        ao_timespec.tv_sec = l_mts.tv_sec;
-        ao_timespec.tv_nsec = l_mts.tv_nsec;
-// TODO -if __linux__
-#else
-        clock_gettime(CLOCK_REALTIME, &ao_timespec);
-#endif
-}
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-uint64_t hurl_get_time_ms(void)
-{
-        uint64_t l_retval;
-        struct timespec l_timespec;
-        _rt_gettime(l_timespec);    
-        l_retval = (((uint64_t)l_timespec.tv_sec) * 1000) + (((uint64_t)l_timespec.tv_nsec) / 1000000);
-        return l_retval;
-}
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-uint64_t hurl_get_delta_time_ms(uint64_t a_start_time_ms)
-{
-        uint64_t l_retval;
-        struct timespec l_timespec;
-        _rt_gettime(l_timespec);    
-        l_retval = (((uint64_t)l_timespec.tv_sec) * 1000) + (((uint64_t)l_timespec.tv_nsec) / 1000000);
-        return l_retval - a_start_time_ms;
-}
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-uint64_t hurl_get_time_us(void)
-{
-        uint64_t l_retval;
-        struct timespec l_timespec;
-        _rt_gettime(l_timespec);
-        l_retval = (((uint64_t)l_timespec.tv_sec) * 1000000) + (((uint64_t)l_timespec.tv_nsec) / 1000);
-        return l_retval;
-}
-
-//: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
@@ -3183,7 +2992,7 @@ void get_stat(ns_hlx::t_stat_cntr_t &ao_total,
         static ns_hlx::t_stat_cntr_t s_last;
         static uint64_t s_stat_last_time_ms = 0;
 
-        uint64_t l_cur_time_ms = hurl_get_time_ms();
+        uint64_t l_cur_time_ms = ns_hlx::get_time_ms();
         uint64_t l_delta_ms = l_cur_time_ms - s_stat_last_time_ms;
 
         // ---------------------------------------
@@ -3207,6 +3016,10 @@ void get_stat(ns_hlx::t_stat_cntr_t &ao_total,
                 ao_total.m_upsv_resp_status_3xx = (*i_t)->m_stat.m_upsv_resp_status_3xx;
                 ao_total.m_upsv_resp_status_4xx = (*i_t)->m_stat.m_upsv_resp_status_4xx;
                 ao_total.m_upsv_resp_status_5xx = (*i_t)->m_stat.m_upsv_resp_status_5xx;
+
+                add_stat(ao_total.m_upsv_stat_us_connect , (*i_t)->m_stat.m_upsv_stat_us_connect);
+                add_stat(ao_total.m_upsv_stat_us_first_response , (*i_t)->m_stat.m_upsv_stat_us_first_response);
+                add_stat(ao_total.m_upsv_stat_us_end_to_end , (*i_t)->m_stat.m_upsv_stat_us_end_to_end);
         }
 
         // ---------------------------------------
@@ -3340,7 +3153,7 @@ void display_responses_line(void)
                 if(g_color)
                 {
                                 printf("| %8.2fs / %10.2fs / %9" PRIu64 " / %9" PRIu64 " / %s%9.2f%s | %s%9.2f%s | %s%9.2f%s | %s%9.2f%s |\n",
-                                                ((double)(hurl_get_delta_time_ms(g_start_time_ms))) / 1000.0,
+                                                ((double)(ns_hlx::get_delta_time_ms(g_start_time_ms))) / 1000.0,
                                                 l_total_calc.m_upsv_resp_s,
                                                 l_total.m_upsv_resp,
                                                 l_total.m_upsv_errors,
@@ -3352,7 +3165,7 @@ void display_responses_line(void)
                 else
                 {
                         printf("| %8.2fs / %10.2fs / %9" PRIu64 " / %9" PRIu64 " / %9.2f | %9.2f | %9.2f | %9.2f |\n",
-                                        ((double)(hurl_get_delta_time_ms(g_start_time_ms))) / 1000.0,
+                                        ((double)(ns_hlx::get_delta_time_ms(g_start_time_ms))) / 1000.0,
                                         l_total_calc.m_upsv_resp_s,
                                         l_total.m_upsv_resp,
                                         l_total.m_upsv_errors,
@@ -3392,7 +3205,7 @@ void display_responses_line(void)
                 if(g_color)
                 {
                                 printf("| %8.2fs / %10.2fs / %9" PRIu64 " / %9" PRIu64 " / %s%9u%s | %s%9u%s | %s%9u%s | %s%9u%s |\n",
-                                                ((double)(hurl_get_delta_time_ms(g_start_time_ms))) / 1000.0,
+                                                ((double)(ns_hlx::get_delta_time_ms(g_start_time_ms))) / 1000.0,
                                                 l_total_calc.m_upsv_resp_s,
                                                 l_total.m_upsv_resp,
                                                 l_total.m_upsv_errors,
@@ -3404,7 +3217,7 @@ void display_responses_line(void)
                 else
                 {
                         printf("| %8.2fs / %10.2fs / %9" PRIu64 " / %9" PRIu64 " / %9u | %9u | %9u | %9u |\n",
-                                        ((double)(hurl_get_delta_time_ms(g_start_time_ms))) / 1000.0,
+                                        ((double)(ns_hlx::get_delta_time_ms(g_start_time_ms))) / 1000.0,
                                         l_total_calc.m_upsv_resp_s,
                                         l_total.m_upsv_resp,
                                         l_total.m_upsv_errors,
@@ -3471,7 +3284,7 @@ void display_results_line(void)
                                         ANSI_COLOR_FG_MAGENTA, l_total.m_upsv_idle_killed, ANSI_COLOR_OFF,
                                         ANSI_COLOR_FG_RED, l_total.m_upsv_errors, ANSI_COLOR_OFF,
                                         ANSI_COLOR_FG_YELLOW, l_total_calc.m_upsv_bytes_read_s/1024.0, ANSI_COLOR_OFF,
-                                        ((double)(hurl_get_delta_time_ms(g_start_time_ms))) / 1000.0,
+                                        ((double)(ns_hlx::get_delta_time_ms(g_start_time_ms))) / 1000.0,
                                         l_total_calc.m_upsv_req_s,
                                         l_total_calc.m_upsv_bytes_read_s/(1024.0*1024.0)
                                         );
@@ -3484,7 +3297,7 @@ void display_results_line(void)
                                 l_total.m_upsv_idle_killed,
                                 l_total.m_upsv_errors,
                                 ((double)(l_total.m_upsv_bytes_read))/(1024.0),
-                                ((double)(hurl_get_delta_time_ms(g_start_time_ms)) / 1000.0),
+                                ((double)(ns_hlx::get_delta_time_ms(g_start_time_ms)) / 1000.0),
                                 l_total_calc.m_upsv_req_s,
                                 l_total_calc.m_upsv_bytes_read_s/(1024.0*1024.0)
                                 );

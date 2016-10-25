@@ -167,6 +167,14 @@ state_top:
                 {
                         int32_t l_status = NC_STATUS_OK;
                         l_status = nc_read(a_in_q, ao_read);
+                        if(m_collect_stats_flag && (ao_read > 0))
+                        {
+                                m_stat.m_total_bytes += ao_read;
+                                if(m_stat.m_tt_first_read_us == 0)
+                                {
+                                        m_stat.m_tt_first_read_us = get_delta_time_us(m_request_start_time_us);
+                                }
+                        }
                         //NDBG_PRINT("l_status: %d\n", l_status);
                         switch(l_status){
                         case NC_STATUS_EOF:
@@ -183,18 +191,6 @@ state_top:
                         {
                                 break;
                         }
-                        }
-
-                        if(l_status > 0)
-                        {
-                                if(m_collect_stats_flag)
-                                {
-                                        m_stat.m_total_bytes += ao_read;
-                                        if(m_stat.m_tt_first_read_us == 0)
-                                        {
-                                                m_stat.m_tt_first_read_us = get_delta_time_us(m_request_start_time_us);
-                                        }
-                                }
                         }
                         return l_status;
                 }
