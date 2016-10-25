@@ -43,6 +43,7 @@
 #include "nconn_tls.h"
 #include "ndebug.h"
 #include "cb.h"
+#include "obj_pool.h"
 
 #include <string.h>
 
@@ -268,9 +269,7 @@ public:
         ns_hlx::nbq *m_out_q;
         bool m_in_q_detached;
         ns_hlx::subr *m_subr;
-#if 0
         uint64_t m_idx;
-#endif
         // -------------------------------------------------
         // Public Static (class) methods
         // -------------------------------------------------
@@ -289,10 +288,10 @@ public:
                 m_in_q(NULL),
                 m_out_q(NULL),
                 m_in_q_detached(false),
-                m_subr(NULL)
+                m_subr(NULL),
+                m_idx(0)
 #if 0
         ,
-                m_idx(0),
                 m_last_active_ms(0),
                 m_timeout_ms(10000)
 #endif
@@ -300,9 +299,9 @@ public:
         int32_t cancel_timer(void *a_timer);
         int32_t teardown(ns_hlx::http_status_t a_status);
         int32_t subr_error(ns_hlx::http_status_t a_status);
-#if 0
         uint64_t get_idx(void) {return m_idx;}
         void set_idx(uint64_t a_idx) {m_idx = a_idx;}
+#if 0
         void clear(void);
         uint32_t get_timeout_ms(void);
         void set_timeout_ms(uint32_t a_t_ms);
@@ -342,6 +341,7 @@ public:
         // Types
         // -------------------------------------------------
         typedef std::list <ns_hlx::nconn *> idle_nconn_list_t;
+        typedef ns_hlx::obj_pool <session> session_pool_t;
 
         // -------------------------------------------------
         // Public methods
@@ -352,6 +352,7 @@ public:
                m_stopped(true),
                m_t_run_thread(),
                m_idle_nconn_list(),
+               m_session_pool(),
                m_stat(),
                m_status_code_count_map(),
                m_num_in_progress(0),
@@ -429,6 +430,7 @@ public:
         sig_atomic_t m_stopped;
         pthread_t m_t_run_thread;
         idle_nconn_list_t m_idle_nconn_list;
+        session_pool_t m_session_pool;
         ns_hlx::t_stat_cntr_t m_stat;
         ns_hlx::status_code_count_map_t m_status_code_count_map;
         uint32_t m_num_in_progress;
@@ -791,7 +793,6 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                 {
                         NDBG_PRINT("%sERROR%s:\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
                 }
-
                 if(!l_ses ||
                    !l_ses->m_subr ||
                    (l_s == ns_hlx::nconn::NC_STATUS_EOF) ||
@@ -864,16 +865,8 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
                                 // Give back rqst + in q
                                 if(l_t_hurl)
                                 {
-                                        // TODO use pools???
-                                        delete l_ses->m_out_q;
-                                        l_ses->m_out_q = NULL;
-                                        if(l_ses->m_resp)
-                                        {
-                                                delete l_ses->m_resp;
-                                                l_ses->m_resp = NULL;
-                                        }
-                                        delete l_ses->m_in_q;
-                                        l_ses->m_in_q = NULL;
+                                        l_t_hurl->m_session_pool.release(l_ses);
+                                        l_ses = NULL;
                                         l_in_q = l_t_hurl->m_orphan_in_q;
                                         l_out_q = l_t_hurl->m_orphan_out_q;
                                 }
@@ -1182,8 +1175,12 @@ int32_t t_hurl::subr_start(void)
         // setup session
         // ---------------------------------------
         session *l_ses = NULL;
-        l_ses = new session();
-
+        l_ses = m_session_pool.get_free();
+        if(!l_ses)
+        {
+                l_ses = new session();
+                m_session_pool.add(l_ses);
+        }
         //NDBG_PRINT("Adding http_data: %p.\n", l_clnt_session);
         l_ses->m_t_hurl = this;
         l_ses->m_timer_obj = NULL;
@@ -1204,40 +1201,37 @@ int32_t t_hurl::subr_start(void)
         //                ANSI_COLOR_BG_BLUE, ANSI_COLOR_OFF,
         //                a_subr.get_label().c_str(),
         //                &a_nconn);
-        ns_hlx::resp *l_resp = NULL;
-        l_resp = new ns_hlx::resp();
-#if 0
-        l_resp = l_ses->m_resp
-        get_from_pool_if_null(l_resp, m_resp_pool);
-#endif
-
+        if(!l_ses->m_resp)
+        {
+                l_ses->m_resp = new ns_hlx::resp();
+                l_ses->m_resp->m_http_parser->data = l_ses->m_resp;
+                l_nconn->set_read_cb(ns_hlx::http_parse);
+                l_nconn->set_read_cb_data(l_ses->m_resp);
+                l_ses->m_resp->m_expect_resp_body_flag = m_subr.get_expect_resp_body_flag();
+        }
         //l_resp->init(m_subr.get_save());
-        l_resp->init(g_verbose);
-        l_resp->m_http_parser->data = l_resp;
-        l_nconn->set_read_cb(ns_hlx::http_parse);
-        l_nconn->set_read_cb_data(l_resp);
-        l_ses->m_resp = l_resp;
-        l_ses->m_resp->m_expect_resp_body_flag = m_subr.get_expect_resp_body_flag();
+        l_ses->m_resp->init(g_verbose);
 
         // ---------------------------------------
         // setup q's
         // ---------------------------------------
-        l_ses->m_in_q = new ns_hlx::nbq(8192);
-        l_ses->m_resp->set_q(l_ses->m_in_q);
-        l_ses->m_out_q = new ns_hlx::nbq(8192);
-#if 0
-        l_uss->m_in_q = get_nbq(l_uss->m_in_q);
-        l_uss->m_resp->set_q(l_uss->m_in_q);
-        if(!l_uss->m_out_q)
+        if(!l_ses->m_in_q)
         {
-                l_uss->m_out_q = get_nbq(l_uss->m_out_q);
+                l_ses->m_in_q = new ns_hlx::nbq(8192);
+                l_ses->m_resp->set_q(l_ses->m_in_q);
         }
         else
         {
-                l_uss->m_out_q->reset_read();
+                l_ses->m_in_q->reset_write();
         }
-#endif
-
+        if(!l_ses->m_out_q)
+        {
+                l_ses->m_out_q = new ns_hlx::nbq(8192);
+        }
+        else
+        {
+                l_ses->m_out_q->reset_write();
+        }
         // ---------------------------------------
         // create request
         // ---------------------------------------
@@ -2154,7 +2148,6 @@ void print_usage(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "  \n");
         fprintf(a_stream, "Stat Options:\n");
         fprintf(a_stream, "  -U, --update         Update output every N ms. Default 500ms.\n");
-        fprintf(a_stream, "  -P, --data_port      Start HTTP Stats Daemon on port.\n");
         fprintf(a_stream, "  \n");
         fprintf(a_stream, "Results Options:\n");
         fprintf(a_stream, "  -j, --json           Display results in json\n");
@@ -2182,9 +2175,7 @@ int main(int argc, char** argv)
 {
         results_scheme_t l_results_scheme = RESULTS_SCHEME_STD;
 
-        uint32_t l_max_threads = 1;
         // TODO Make default definitions
-        uint32_t l_num_parallel = 100;
         int l_max_reqs_per_conn = 1;
         bool l_input_flag = false;
         bool l_wildcarding = true;
@@ -2420,6 +2411,12 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'p':
                 {
+                        int32_t l_num_parallel = atoi(optarg);
+                        if (l_num_parallel < 1)
+                        {
+                                printf("Error num parallel must be at least 1\n");
+                                return HLX_STATUS_ERROR;
+                        }
                         g_num_parallel = l_num_parallel;
                         break;
                 }
@@ -2466,8 +2463,7 @@ int main(int argc, char** argv)
                                 printf("Error num-threads must be 0 or greater\n");
                                 return HLX_STATUS_ERROR;
                         }
-                        l_max_threads = l_val;
-                        g_num_threads = l_max_threads;
+                        g_num_threads = l_val;
                         break;
                 }
                 // ---------------------------------------
@@ -2779,10 +2775,10 @@ int main(int argc, char** argv)
                 fprintf(stdout, "Error performing getrlimit. Reason: %s\n", strerror(errno));
                 return HLX_STATUS_ERROR;
         }
-        if(l_rlim.rlim_cur < (uint64_t)(l_max_threads*l_num_parallel))
+        if(l_rlim.rlim_cur < (uint64_t)(g_num_threads*g_num_parallel))
         {
                 fprintf(stdout, "Error threads[%d]*parallelism[%d] > process fd resource limit[%u]\n",
-                                l_max_threads, l_num_parallel, (uint32_t)l_rlim.rlim_cur);
+                                g_num_threads, g_num_parallel, (uint32_t)l_rlim.rlim_cur);
                 return HLX_STATUS_ERROR;
         }
 
@@ -2852,12 +2848,12 @@ int main(int argc, char** argv)
                 if(l_max_reqs_per_conn < 0)
                 {
                         fprintf(stdout, "Running %d threads %d parallel connections per thread with infinite requests per connection\n",
-                                l_max_threads, l_num_parallel);
+                                g_num_threads, g_num_parallel);
                 }
                 else
                 {
                         fprintf(stdout, "Running %d threads %d parallel connections per thread with %d requests per connection\n",
-                                l_max_threads, l_num_parallel, l_max_reqs_per_conn);
+                                        g_num_threads, g_num_parallel, l_max_reqs_per_conn);
                 }
         }
 
@@ -2953,17 +2949,17 @@ int main(int argc, char** argv)
         // -------------------------------------------
         // Init
         // -------------------------------------------
-        for(uint32_t i_t = 0; i_t < l_max_threads; ++i_t)
+        for(uint32_t i_t = 0; i_t < g_num_threads; ++i_t)
         {
                 // Calculate num to request
                 int32_t l_num_to_request = -1;
                 if(g_num_to_request > 0)
                 {
                         // first thread gets remainder
-                        l_num_to_request = g_num_to_request / l_max_threads;
+                        l_num_to_request = g_num_to_request / g_num_threads;
                         if(i_t == 0)
                         {
-                                l_num_to_request += g_num_to_request % l_max_threads;
+                                l_num_to_request += g_num_to_request % g_num_threads;
                         }
                 }
                 t_hurl *l_t_hurl = new t_hurl(*l_subr, g_num_parallel, l_num_to_request);
