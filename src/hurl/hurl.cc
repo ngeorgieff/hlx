@@ -24,6 +24,15 @@
 //: ----------------------------------------------------------------------------
 //: Includes
 //: ----------------------------------------------------------------------------
+#include "tinymt64.h"
+#include "nlookup.h"
+#include "nconn.h"
+#include "nconn_tcp.h"
+#include "nconn_tls.h"
+#include "ndebug.h"
+#include "cb.h"
+#include "obj_pool.h"
+
 #include "hlx/stat.h"
 #include "hlx/api_resp.h"
 #include "hlx/subr.h"
@@ -36,15 +45,6 @@
 #include "hlx/resp.h"
 #include "hlx/nbq.h"
 #include "hlx/time_util.h"
-
-#include "tinymt64.h"
-#include "nlookup.h"
-#include "nconn.h"
-#include "nconn_tcp.h"
-#include "nconn_tls.h"
-#include "ndebug.h"
-#include "cb.h"
-#include "obj_pool.h"
 
 #include <string.h>
 
@@ -275,7 +275,6 @@ public:
         ns_hlx::resp *m_resp;
         ns_hlx::nbq *m_in_q;
         ns_hlx::nbq *m_out_q;
-        bool m_in_q_detached;
         ns_hlx::subr *m_subr;
         uint64_t m_idx;
         // -------------------------------------------------
@@ -295,7 +294,6 @@ public:
                 m_resp(NULL),
                 m_in_q(NULL),
                 m_out_q(NULL),
-                m_in_q_detached(false),
                 m_subr(NULL),
                 m_idx(0)
 #if 0
@@ -780,20 +778,10 @@ int32_t session::run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode)
         do {
                 uint32_t l_read = 0;
                 uint32_t l_written = 0;
-                //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): l_in_q: %p l_out_q: %p\n", a_conn_mode, l_in_q, l_out_q);
                 l_s = l_nconn->nc_run_state_machine(a_conn_mode, l_in_q, l_read, l_out_q, l_written);
                 //NDBG_PRINT("l_nconn->nc_run_state_machine(%d): status: %d read: %u l_written: %u\n", a_conn_mode, l_s, l_read, l_written);
                 if(l_t_hurl)
                 {
-                        // TODO REMOVE
-                        //if(l_read > 0 && (l_in_q == l_t_hurl->m_orphan_in_q))
-                        //{
-                        //        NDBG_PRINT("%sERROR%s: READ WITH ORPHAN\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
-                        //}
-                        //if(l_written > 0 && (l_out_q == l_t_hurl->m_orphan_out_q))
-                        //{
-                        //        NDBG_PRINT("%sERROR%s: WROTE WITH ORPHAN\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF);
-                        //}
                         l_t_hurl->m_stat.m_upsv_bytes_read += l_read;
                         l_t_hurl->m_stat.m_upsv_bytes_written += l_written;
                         if(!g_verbose && (l_written > 0))
@@ -988,31 +976,9 @@ void *t_hurl::t_run(void *a_nothing)
                 return NULL;
         }
         m_stopped = false;
-        // Reset stats...
         m_stat.clear();
-
-#if 0
-        if(m_t_conf->m_update_stats_ms)
-        {
-                // Add timers...
-                void *l_timer = NULL;
-                ns_hlx::add_timer(this, m_t_conf->m_update_stats_ms,
-                                  s_stat_update, NULL,
-                                  &l_timer);
-        }
-#endif
-
-        // Set start time
-#if 0
-        m_start_time_s = get_time_s();
-        // TODO Test -remove
-        //uint64_t l_last_time_ms = ns_hlx::get_time_ms();
-        //uint64_t l_num_run = 0;
-#endif
-
         l_s = subr_dequeue();
         // TODO check return status???
-
         // -------------------------------------------------
         // Run server
         // -------------------------------------------------
@@ -1026,7 +992,6 @@ void *t_hurl::t_run(void *a_nothing)
                         // TODO log run failure???
                 }
                 // Subrequests
-                //NDBG_PRINT("subr_dequeue.\n");
                 l_s = subr_dequeue();
                 if(l_s != HLX_STATUS_OK)
                 {
