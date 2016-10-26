@@ -24,23 +24,17 @@
 //: ----------------------------------------------------------------------------
 //: Includes
 //: ----------------------------------------------------------------------------
-#include "ndebug.h"
 #include "tls_util.h"
-#include "cb.h"
-#include "nconn.h"
-#include "nconn_tcp.h"
-#include "nconn_tls.h"
-#include "nresolver.h"
+#include "ndebug.h"
 
-#include "hlx/atomic.h"
+#include "hlx/srvr.h"
+#include "hlx/phurl_h.h"
 #include "hlx/resp.h"
 #include "hlx/status.h"
 #include "hlx/stat.h"
 #include "hlx/trace.h"
+#include "hlx/clnt_session.h"
 #include "hlx/string_util.h"
-#include "hlx/subr.h"
-#include "hlx/evr.h"
-#include "hlx/nbq.h"
 
 #include "rapidjson/document.h"
 #include "rapidjson/stringbuffer.h"
@@ -187,25 +181,18 @@ typedef struct host_struct {
                 m_port(0)
         {};
 } phurl_host_t;
-typedef std::list <phurl_host_t> phurl_host_list_t;
-typedef std::map <std::string, tls_info_t> tls_info_map_t;
-class t_phurl;
-typedef std::list <t_phurl *> t_phurl_list_t;
 
-#if 0
 //typedef std::list <phurl_resp_t *> phurl_resp_list_t;
 typedef std::list <ns_hlx::phurl_u *> phurl_h_resp_list_t;
 typedef std::set <uint64_t> phurl_uid_set_t;
-#endif
+typedef std::list <phurl_host_t> phurl_host_list_t;
+typedef std::map <std::string, tls_info_t> tls_info_map_t;
 
-#if 0
 class broadcast_h;
-#endif
 
 //: ----------------------------------------------------------------------------
 //: Settings
 //: ----------------------------------------------------------------------------
-#if 0
 typedef struct settings_struct
 {
         bool m_verbose;
@@ -213,11 +200,9 @@ typedef struct settings_struct
         bool m_quiet;
         bool m_show_stats;
         bool m_show_summary;
-#if 0
         ns_hlx::srvr *m_srvr;
         broadcast_h *m_broadcast_h;
         phurl_h_resp_list_t m_phr_list;
-#endif
         phurl_host_list_t *m_host_list;
         uint32_t m_total_reqs;
         uint32_t m_timeout_ms;
@@ -237,11 +222,9 @@ typedef struct settings_struct
                 m_quiet(false),
                 m_show_stats(false),
                 m_show_summary(false),
-#if 0
                 m_srvr(NULL),
                 m_broadcast_h(NULL),
                 m_phr_list(),
-#endif
                 m_host_list(NULL),
                 m_total_reqs(0),
                 m_timeout_ms(0),
@@ -259,301 +242,28 @@ private:
         settings_struct(const settings_struct &);
 
 } settings_struct_t;
-#endif
 
 //: ----------------------------------------------------------------------------
 //: Globals
 //: ----------------------------------------------------------------------------
-static bool g_test_finished = false;
-static bool g_cancelled = false;
-static t_phurl_list_t g_t_phurl_list;
+bool g_test_finished = false;
+bool g_cancelled = false;
+settings_struct_t *g_settings = NULL;
 
 //: ----------------------------------------------------------------------------
 //: Prototypes
 //: ----------------------------------------------------------------------------
-void display_status_line(void);
-void display_summary(void);
-std::string dump_all_responses(output_type_t a_output_type, int a_part_map);
+void display_status_line(settings_struct_t &a_settings);
+void display_summary(settings_struct_t &a_settings, uint32_t a_num_hosts);
 int32_t read_file(const char *a_file, char **a_buf, uint32_t *a_len);
-
-//: ----------------------------------------------------------------------------
-//: t_hurl
-//: ----------------------------------------------------------------------------
-class t_phurl
-{
-public:
-        // -------------------------------------------------
-        // Types
-        // -------------------------------------------------
-
-        // -------------------------------------------------
-        // Public methods
-        // -------------------------------------------------
-        t_phurl(uint32_t a_max_parallel,
-                int32_t a_num_to_request):
-                m_stopped(true),
-                m_t_run_thread(),
-                m_num_in_progress(0),
-                m_orphan_in_q(NULL),
-                m_orphan_out_q(NULL),
-                m_evr_loop(NULL),
-                m_is_initd(false),
-                m_num_parallel_max(a_max_parallel)
-        {
-                m_orphan_in_q = new ns_hlx::nbq(4096);
-                m_orphan_out_q = new ns_hlx::nbq(4096);
-        }
-        ~t_phurl()
-        {
-                if(m_orphan_in_q)
-                {
-                        delete m_orphan_in_q;
-                        m_orphan_in_q = NULL;
-                }
-                if(m_orphan_out_q)
-                {
-                        delete m_orphan_out_q;
-                        m_orphan_out_q = NULL;
-                }
-        }
-        int32_t init(void)
-        {
-                if(m_is_initd) return HLX_STATUS_OK;
-                // TODO -make loop configurable
-#if defined(__linux__)
-                m_evr_loop = new ns_hlx::evr_loop(ns_hlx::EVR_LOOP_EPOLL, 512);
-#elif defined(__FreeBSD__) || defined(__APPLE__)
-                m_evr_loop = new ns_hlx::evr_loop(ns_hlx::EVR_LOOP_SELECT, 512);
-#else
-                m_evr_loop = new ns_hlx::evr_loop(ns_hlx::EVR_LOOP_SELECT, 512);
-#endif
-                if(!m_evr_loop)
-                {
-                        TRC_ERROR("m_evr_loop == NULL");
-                        return HLX_STATUS_ERROR;
-                }
-                m_is_initd = true;
-                return HLX_STATUS_OK;
-        }
-        int run(void) {
-                int32_t l_pthread_error = 0;
-                l_pthread_error = pthread_create(&m_t_run_thread, NULL, t_run_static, this);
-                if (l_pthread_error != 0) {
-                        return HLX_STATUS_ERROR;
-                }
-                return HLX_STATUS_OK;
-        };
-        void *t_run(void *a_nothing);
-        int32_t subr_try_start(void);
-        void stop(void) {
-                m_stopped = true;
-                m_evr_loop->signal();
-        }
-        bool is_running(void) { return !m_stopped; }
-        int32_t cancel_timer(void *a_timer) {
-                if(!m_evr_loop) return HLX_STATUS_ERROR;
-                if(!a_timer) return HLX_STATUS_OK;
-                ns_hlx::evr_timer_t *l_t = static_cast<ns_hlx::evr_timer_t *>(a_timer);
-                return m_evr_loop->cancel_timer(l_t);
-        }
-        //int32_t cleanup_session(session *a_ses, ns_hlx::nconn *a_nconn);
-        void add_stat_to_agg(const ns_hlx::conn_stat_t &a_conn_stat, uint16_t a_status_code);
-
-        // -------------------------------------------------
-        // Public members
-        // -------------------------------------------------
-        sig_atomic_t m_stopped;
-        pthread_t m_t_run_thread;
-        uint32_t m_num_in_progress;
-        ns_hlx::nbq *m_orphan_in_q;
-        ns_hlx::nbq *m_orphan_out_q;
-private:
-        // -------------------------------------------------
-        // Private methods
-        // -------------------------------------------------
-        // Disallow copy/assign
-        t_phurl& operator=(const t_phurl &);
-        t_phurl(const t_phurl &);
-
-        //Helper for pthreads
-        static void *t_run_static(void *a_context)
-        {
-                return reinterpret_cast<t_phurl *>(a_context)->t_run(NULL);
-        }
-        ns_hlx::nconn *create_new_nconn(void);
-        int32_t subr_start(void);
-        int32_t subr_dequeue(void);
-        // -------------------------------------------------
-        // Private members
-        // -------------------------------------------------
-        ns_hlx::evr_loop *m_evr_loop;
-        bool m_is_initd;
-        uint32_t m_num_parallel_max;
-
-};
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-ns_hlx::uint64_atomic_t g_cur_subr_uid = 0;
-static inline uint64_t get_next_subr_uuid(void)
-{
-        return ++g_cur_subr_uid;
-}
-
-//: ----------------------------------------------------------------------------
-//: session
-//: ----------------------------------------------------------------------------
-class session {
-
-public:
-        // -------------------------------------------------
-        // Public members
-        // -------------------------------------------------
-        ns_hlx::nconn *m_nconn;
-        t_phurl *m_t_phurl;
-        ns_hlx::evr_timer_t *m_timer_obj;
-        ns_hlx::resp *m_resp;
-        ns_hlx::nbq *m_in_q;
-        ns_hlx::nbq *m_out_q;
-        bool m_in_q_detached;
-        ns_hlx::subr *m_subr;
-        uint64_t m_idx;
-        // -------------------------------------------------
-        // Public Static (class) methods
-        // -------------------------------------------------
-        static int32_t evr_fd_readable_cb(void *a_data) {return run_state_machine(a_data, ns_hlx::EVR_MODE_READ);}
-        static int32_t evr_fd_writeable_cb(void *a_data){return run_state_machine(a_data, ns_hlx::EVR_MODE_WRITE);}
-        static int32_t evr_fd_error_cb(void *a_data) {return run_state_machine(a_data, ns_hlx::EVR_MODE_ERROR);}
-        static int32_t evr_fd_timeout_cb(void *a_ctx, void *a_data){return run_state_machine(a_data, ns_hlx::EVR_MODE_TIMEOUT);}
-        // -------------------------------------------------
-        // Public methods
-        // -------------------------------------------------
-        session(void):
-                m_nconn(NULL),
-                m_t_phurl(NULL),
-                m_timer_obj(NULL),
-                m_resp(NULL),
-                m_in_q(NULL),
-                m_out_q(NULL),
-                m_in_q_detached(false),
-                m_subr(NULL),
-                m_idx(0),
-                m_timeout_ms(10000)
-        {}
-        int32_t cancel_timer(void *a_timer);
-        int32_t teardown(ns_hlx::http_status_t a_status);
-        int32_t subr_error(ns_hlx::http_status_t a_status);
-        uint64_t get_idx(void) {return m_idx;}
-        void set_idx(uint64_t a_idx) {m_idx = a_idx;}
-        void clear(void);
-        uint32_t get_timeout_ms(void);
-        void set_timeout_ms(uint32_t a_t_ms);
-
-        // -------------------------------------------------
-        // Public members
-        // -------------------------------------------------
-        uint32_t m_timeout_ms;
-
-private:
-        // -------------------------------------------------
-        // Private methods
-        // -------------------------------------------------
-        // Disallow copy/assign
-        session& operator=(const session &);
-        session(const session &);
-        bool subr_complete(void);
-        void subr_log_status(uint16_t a_status = 0);
-
-        // -------------------------------------------------
-        // Private Static (class) methods
-        // -------------------------------------------------
-        static int32_t run_state_machine(void *a_data, ns_hlx::evr_mode_t a_conn_mode);
-};
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-void *t_phurl::t_run(void *a_nothing)
-{
-        int32_t l_s;
-        l_s = init();
-        if(l_s != HLX_STATUS_OK)
-        {
-                NDBG_PRINT("Error performing init.\n");
-                return NULL;
-        }
-        m_stopped = false;
-
-        l_s = subr_dequeue();
-        // TODO check return status???
-        // -------------------------------------------------
-        // Run server
-        // -------------------------------------------------
-        while(!m_stopped)
-        {
-                //NDBG_PRINT("Running.\n");
-                l_s = m_evr_loop->run();
-                if(l_s != HLX_STATUS_OK)
-                {
-                        // TODO log run failure???
-                }
-                // Subrequests
-                l_s = subr_dequeue();
-                if(l_s != HLX_STATUS_OK)
-                {
-                        //NDBG_PRINT("Error performing subr_try_deq.\n");
-                        //return NULL;
-                }
-        }
-        //NDBG_PRINT("Stopped...\n");
-        m_stopped = true;
-        return NULL;
-}
-
-//: ----------------------------------------------------------------------------
-//: \details: TODO
-//: \return:  TODO
-//: \param:   TODO
-//: ----------------------------------------------------------------------------
-int32_t t_phurl::subr_dequeue(void)
-{
-#if 0
-        uint32_t l_dq = 0;
-        while(!g_test_finished &&
-              !m_stopped &&
-              (m_num_in_progress < m_num_parallel_max) &&
-              ((m_num_to_request < 0) || ((uint32_t)m_num_to_request > m_stat.m_upsv_reqs)))
-        {
-                int32_t l_s;
-                l_s = subr_start();
-                if(l_s != HLX_STATUS_OK)
-                {
-                        // Log error
-                        NDBG_PRINT("%sERROR DEQUEUEING%s\n", ANSI_COLOR_FG_RED, ANSI_COLOR_OFF);
-                }
-                else
-                {
-                      ++m_num_in_progress;
-                }
-                ++l_dq;
-        }
-        //NDBG_PRINT("%sDEQUEUEd%s: %u progress/max %u/%u\n",
-        //                ANSI_COLOR_FG_BLUE, ANSI_COLOR_OFF,
-        //                l_dq,
-        //                m_num_in_progress, m_num_parallel_max);
-#endif
-        return HLX_STATUS_OK;
-}
+std::string dump_all_responses(settings_struct_t &a_settings,
+                               phurl_h_resp_list_t &a_resp_list,
+                               bool a_color, bool a_pretty,
+                               output_type_t a_output_type, int a_part_map);
 
 //: ----------------------------------------------------------------------------
 //: Handler
 //: ----------------------------------------------------------------------------
-#if 0
 class broadcast_h: public ns_hlx::phurl_h
 {
 public:
@@ -572,14 +282,12 @@ public:
                                   const char *a_error_str);
         static int32_t s_create_resp(ns_hlx::phurl_u *a_phr);
 };
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
 int32_t broadcast_h::do_get_bc(ns_hlx::srvr *a_srvr,
                                ns_hlx::t_srvr *a_t_srvr,
                                const phurl_host_list_t &a_host_list,
@@ -647,27 +355,23 @@ int32_t broadcast_h::do_get_bc(ns_hlx::srvr *a_srvr,
         }
         return HLX_STATUS_OK;
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
 int32_t broadcast_h::create_resp(ns_hlx::subr &a_subr, ns_hlx::phurl_u *a_fanout_resp)
 {
         //printf("%s.%s.%d: %sDONE%s\n",__FILE__,__FUNCTION__,__LINE__, ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF);
         return HLX_STATUS_OK;
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
 int32_t broadcast_h::s_completion_cb(ns_hlx::subr &a_subr, ns_hlx::nconn &a_nconn, ns_hlx::resp &a_resp)
 {
         ns_hlx::phurl_u *l_phr = static_cast<ns_hlx::phurl_u *>(a_subr.get_data());
@@ -712,14 +416,12 @@ int32_t broadcast_h::s_completion_cb(ns_hlx::subr &a_subr, ns_hlx::nconn &a_ncon
         if(l_s) pthread_mutex_unlock(&(l_s->m_mutex));
         return s_done_check(a_subr, l_phr);
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
 int32_t broadcast_h::s_error_cb(ns_hlx::subr &a_subr,
                                 ns_hlx::nconn *a_nconn,
                                 ns_hlx::http_status_t a_status,
@@ -822,19 +524,16 @@ int32_t broadcast_h::s_error_cb(ns_hlx::subr &a_subr,
         if(l_s) pthread_mutex_unlock(&(l_s->m_mutex));
         return s_done_check(a_subr, l_phr);
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: TODO
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-#if 0
 int32_t broadcast_h::s_create_resp(ns_hlx::phurl_u *a_phr)
 {
         return 0;
 }
-#endif
 
 //: ----------------------------------------------------------------------------
 //: \details: Signal handler
@@ -848,9 +547,7 @@ void sig_handler(int signo)
                 // Kill program
                 g_test_finished = true;
                 g_cancelled = true;
-#if 0
                 g_settings->m_srvr->stop();
-#endif
         }
 }
 
@@ -902,23 +599,21 @@ void nonblock(int state)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-int command_exec(void)
+int command_exec(settings_struct_t &a_settings, bool a_send_stop)
 {
         int i = 0;
         char l_cmd = ' ';
         //bool l_sent_stop = false;
         //bool l_first_time = true;
         nonblock(NB_ENABLE);
+        int l_status;
 
-#if 0
         if(!a_settings.m_host_list)
         {
                 return -1;
         }
-#endif
 
         // Split host list between threads...
-#if 0
         ns_hlx::srvr::t_srvr_list_t &l_t_srvr_list = a_settings.m_srvr->get_t_srvr_list();
         size_t l_num_per = a_settings.m_host_list->size() / l_t_srvr_list.size();
         phurl_host_list_t::iterator i_h = a_settings.m_host_list->begin();
@@ -939,7 +634,6 @@ int command_exec(void)
                 l_phr->m_delete = false;
                 l_phr->m_data = &a_settings;
                 a_settings.m_phr_list.push_back(l_phr);
-                int l_status;
                 l_status = a_settings.m_broadcast_h->do_get_bc(a_settings.m_srvr,
                                                                *i_t,
                                                                l_host_list,
@@ -950,17 +644,13 @@ int command_exec(void)
                 }
         }
         a_settings.m_total_reqs = a_settings.m_host_list->size();
-#endif
 
-#if 0
         // run...
-        int l_status;
         l_status = a_settings.m_srvr->run();
         if(HLX_STATUS_OK != l_status)
         {
                 return -1;
         }
-#endif
 
         //printf("Adding subr\n\n");
 
@@ -978,15 +668,22 @@ int command_exec(void)
                         switch (l_cmd)
                         {
                         // -------------------------------------------
+                        // Display
+                        // -only works when not reading from stdin
+                        // -------------------------------------------
+                        case 'd':
+                        {
+                                a_settings.m_srvr->display_stat();
+                                break;
+                        }
+                        // -------------------------------------------
                         // Quit
                         // -only works when not reading from stdin
                         // -------------------------------------------
                         case 'q':
                         {
                                 g_test_finished = true;
-#if 0
                                 a_settings.m_srvr->stop();
-#endif
                                 //l_sent_stop = true;
                                 break;
                         }
@@ -1003,17 +700,14 @@ int command_exec(void)
                 // TODO add define...
                 usleep(500000);
 
-#if 0
                 if(a_settings.m_show_stats)
                 {
                         display_status_line(a_settings);
                 }
-#endif
 
                 if(!g_test_finished)
                 {
                         g_test_finished = true;
-#if 0
                         pthread_mutex_lock(&(a_settings.m_mutex));
                         for(phurl_h_resp_list_t::iterator i_p = a_settings.m_phr_list.begin();
                             i_p != a_settings.m_phr_list.end();
@@ -1028,7 +722,6 @@ int command_exec(void)
                                 }
                         }
                         pthread_mutex_unlock(&(a_settings.m_mutex));
-#endif
                 }
                 //if (!a_settings.m_srvr->is_running())
                 //{
@@ -1037,16 +730,128 @@ int command_exec(void)
                 //}
         }
         //printf("%s.%s.%d: STOP\n", __FILE__,__FUNCTION__,__LINE__);
-#if 0
         a_settings.m_srvr->stop();
         a_settings.m_srvr->wait_till_stopped();
+
         // One more status for the lovers
         if(a_settings.m_show_stats)
         {
                 display_status_line(a_settings);
         }
-#endif
         nonblock(NB_DISABLE);
+        return 0;
+}
+
+//: ----------------------------------------------------------------------------
+//: \details: TODO
+//: \return:  TODO
+//: \param:   TODO
+//: ----------------------------------------------------------------------------
+void show_help(void)
+{
+        printf(" phurl commands: \n");
+        printf("  h    Help or ?\n");
+        printf("  r    Run\n");
+        printf("  d    Display Stats\n");
+        printf("  q    Quit\n");
+}
+
+#define MAX_CMD_SIZE 64
+int command_exec_cli(settings_struct_t &a_settings)
+{
+        bool l_done = false;
+        // -------------------------------------------
+        // Interactive mode banner
+        // -------------------------------------------
+        if(a_settings.m_color)
+        {
+                printf("%sphurl interactive mode%s: (%stype h for command help%s)\n",
+                                ANSI_COLOR_FG_YELLOW, ANSI_COLOR_OFF,
+                                ANSI_COLOR_FG_CYAN, ANSI_COLOR_OFF);
+        }
+        else
+        {
+                printf("phurl interactive mode: (type h for command help)\n");
+        }
+
+        // ---------------------------------------
+        //   Loop forever until user quits
+        // ---------------------------------------
+        while (!l_done && !g_cancelled)
+        {
+                // -------------------------------------------
+                // Interactive mode prompt
+                // -------------------------------------------
+                if(a_settings.m_color)
+                {
+                        printf("%sphurl>>%s", ANSI_COLOR_FG_GREEN, ANSI_COLOR_OFF);
+                }
+                else
+                {
+                        printf("phurl>>");
+                }
+                fflush(stdout);
+
+                char l_cmd[MAX_CMD_SIZE] = {' '};
+                char *l_status;
+                l_status = fgets(l_cmd, MAX_CMD_SIZE, stdin);
+                if(!l_status)
+                {
+                        printf("Error reading cmd from stdin\n");
+                        return -1;
+                }
+
+                switch (l_cmd[0])
+                {
+                // -------------------------------------------
+                // Quit
+                // -only works when not reading from stdin
+                // -------------------------------------------
+                case 'q':
+                {
+                        l_done = true;
+                        break;
+                }
+                // -------------------------------------------
+                // run
+                // -------------------------------------------
+                case 'r':
+                {
+                        int l_status;
+                        l_status = command_exec(a_settings, false);
+                        if(l_status != 0)
+                        {
+                                return -1;
+                        }
+                        break;
+                }
+                // -------------------------------------------
+                // Display
+                // -only works when not reading from stdin
+                // -------------------------------------------
+                case 'd':
+                {
+                        a_settings.m_srvr->display_stat();
+                        break;
+                }
+                // -------------------------------------------
+                // Help
+                // -------------------------------------------
+                case 'h':
+                case '?':
+                {
+                        show_help();
+                        break;
+                }
+                // -------------------------------------------
+                // Default
+                // -------------------------------------------
+                default:
+                {
+                        break;
+                }
+                }
+        }
         return 0;
 }
 
@@ -1096,6 +901,7 @@ void print_version(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "Copyright (C) 2016 Verizon Digital Media.\n");
         fprintf(a_stream, "               Version: %s\n", HLX_VERSION);
         exit(a_exit_code);
+
 }
 
 //: ----------------------------------------------------------------------------
@@ -1142,6 +948,9 @@ void print_usage(FILE* a_stream, int a_exit_code)
         fprintf(a_stream, "  -F, --tls_ca_file    SSL CA File.\n");
         fprintf(a_stream, "  -L, --tls_ca_path    SSL CA Path.\n");
         fprintf(a_stream, "  \n");
+        fprintf(a_stream, "Command Line Client:\n");
+        fprintf(a_stream, "  -I, --cli            Start interactive command line -URL not required.\n");
+        fprintf(a_stream, "  \n");
         fprintf(a_stream, "Print Options:\n");
         fprintf(a_stream, "  -v, --verbose        Verbose logging\n");
         fprintf(a_stream, "  -c, --no_color       Turn off colors\n");
@@ -1173,55 +982,45 @@ void print_usage(FILE* a_stream, int a_exit_code)
 //: ----------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
-#if 0
         ns_hlx::srvr *l_srvr = new ns_hlx::srvr();
 
         // For sighandler
         settings_struct_t l_settings;
         l_settings.m_srvr = l_srvr;
         g_settings = &l_settings;
-#endif
 
         // Suppress errors
         ns_hlx::trc_log_level_set(ns_hlx::TRC_LOG_LEVEL_NONE);
 
-#if 0
         l_srvr->set_collect_stats(false);
         l_srvr->set_dns_use_ai_cache(true);
         l_srvr->set_update_stats_ms(500);
-#endif
 
         if(isatty(fileno(stdout)))
         {
-#if 0
                 l_settings.m_color = true;
                 l_srvr->set_rqst_resp_logging_color(true);
-#endif
         }
 
         // -------------------------------------------------
         // Subrequest settings
         // -------------------------------------------------
-#if 0
         broadcast_h *l_broadcast_h = new broadcast_h();
         l_settings.m_broadcast_h = l_broadcast_h;
-#endif
-
         phurl_host_list_t *l_host_list = new phurl_host_list_t();
-#if 0
         l_settings.m_host_list = l_host_list;
-#endif
 
-        ns_hlx::subr *l_subr = new ns_hlx::subr();
+        ns_hlx::subr *l_subr = &(l_broadcast_h->get_subr_template_mutable());
         l_subr->set_save(true);
         l_subr->set_detach_resp(true);
 
         // Setup default headers before the user
         l_subr->set_header("User-Agent", "Verizon Digital Media Parallel Curl phurl ");
-#if 0
+        //l_subr->set_header("Accept", "*/*");
+        //l_srvr->set_header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+        //l_srvr->set_header("Accept-Encoding", "gzip,deflate");
         l_subr->set_completion_cb(broadcast_h::s_completion_cb);
         l_subr->set_error_cb(broadcast_h::s_error_cb);
-#endif
         //l_subr->set_keepalive(true);
 
         // -------------------------------------------
@@ -1258,6 +1057,7 @@ int main(int argc, char** argv)
                 { "tls_no_host",    0, 0, 'M' },
                 { "tls_ca_file",    1, 0, 'F' },
                 { "tls_ca_path",    1, 0, 'L' },
+                { "cli",            0, 0, 'I' },
                 { "verbose",        0, 0, 'v' },
                 { "no_color",       0, 0, 'c' },
                 { "quiet",          0, 0, 'q' },
@@ -1282,6 +1082,7 @@ int main(int argc, char** argv)
         std::string l_url;
         std::string l_ai_cache;
         std::string l_output_file = "";
+        bool l_cli = false;
         int l_max_threads = 1;
         int l_num_parallel = 1;
 
@@ -1293,12 +1094,6 @@ int main(int argc, char** argv)
                             PART_HEADERS |
                             PART_BODY;
         bool l_output_pretty = false;
-
-
-        // TODO REMOVE
-        (void)l_output_pretty;
-        (void)l_output_part;
-        (void)l_output_mode;
 
         // -------------------------------------------
         // Assume unspecified arg url...
@@ -1330,9 +1125,9 @@ int main(int argc, char** argv)
         // Args...
         // -------------------------------------------------
 #ifdef ENABLE_PROFILER
-        char l_short_arg_list[] = "hVvu:d:f:J:x:y:O:KNBMF:L:p:t:H:X:T:nkA:CQ:W:Rcqsmo:ljPG:";
+        char l_short_arg_list[] = "hVvu:d:f:J:x:y:O:KNBMF:L:Ip:t:H:X:T:nkA:CQ:W:Rcqsmo:ljPG:";
 #else
-        char l_short_arg_list[] = "hVvu:d:f:J:x:y:O:KNBMF:L:p:t:H:X:T:nkA:CQ:W:Rcqsmo:ljP";
+        char l_short_arg_list[] = "hVvu:d:f:J:x:y:O:KNBMF:L:Ip:t:H:X:T:nkA:CQ:W:Rcqsmo:ljP";
 #endif
         while ((l_opt = getopt_long_only(argc, argv, l_short_arg_list, l_long_options, &l_option_index)) != -1 && ((unsigned char)l_opt != 255))
         {
@@ -1437,9 +1232,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'y':
                 {
-#if 0
                         l_srvr->set_tls_client_ctx_cipher_list(l_arg);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1447,14 +1240,13 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'O':
                 {
-#if 0
                         int32_t l_status;
                         l_status = l_srvr->set_tls_client_ctx_options(l_arg);
                         if(l_status != HLX_STATUS_OK)
                         {
                                 return HLX_STATUS_ERROR;
                         }
-#endif
+
                         break;
                 }
                 // ---------------------------------------
@@ -1494,9 +1286,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'F':
                 {
-#if 0
                         l_srvr->set_tls_client_ctx_ca_file(l_arg);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1504,9 +1294,15 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'L':
                 {
-#if 0
                         l_srvr->set_tls_client_ctx_ca_path(l_arg);
-#endif
+                        break;
+                }
+                // ---------------------------------------
+                // cli
+                // ---------------------------------------
+                case 'I':
+                {
+                        l_cli = true;
                         break;
                 }
                 // ---------------------------------------
@@ -1522,9 +1318,8 @@ int main(int argc, char** argv)
                                 printf("Error parallel must be at least 1\n");
                                 return -1;
                         }
-#if 0
+
                         l_srvr->set_num_parallel(l_num_parallel);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1539,9 +1334,7 @@ int main(int argc, char** argv)
                                 printf("Error num-threads must be 0 or greater\n");
                                 return -1;
                         }
-#if 0
                         l_srvr->set_num_threads(l_max_threads);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1600,9 +1393,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'n':
                 {
-#if 0
                         l_srvr->set_dns_use_sync(true);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1610,9 +1401,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'k':
                 {
-#if 0
                         l_srvr->set_dns_use_ai_cache(false);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1620,9 +1409,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'A':
                 {
-#if 0
                         l_srvr->set_dns_ai_cache_file(l_arg);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1639,11 +1426,9 @@ int main(int argc, char** argv)
                 case 'Q':
                 {
                         // Set complete time in ms seconds
-#if 0
                         int l_completion_time_s = atoi(optarg);
                         // TODO Check value...
                         l_settings.m_timeout_ms = l_completion_time_s*1000;
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1657,9 +1442,7 @@ int main(int argc, char** argv)
                                 printf("Error: completion ratio must be > 0.0 and < 100.0\n");
                                 return -1;
                         }
-#if 0
                         l_settings.m_completion_ratio = (float)l_ratio;
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1667,10 +1450,8 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'v':
                 {
-#if 0
                         l_settings.m_verbose = true;
                         l_srvr->set_rqst_resp_logging(true);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1678,10 +1459,8 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'c':
                 {
-#if 0
                         l_settings.m_color = false;
                         l_srvr->set_rqst_resp_logging_color(false);
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1689,9 +1468,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'q':
                 {
-#if 0
                         l_settings.m_quiet = true;
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1699,9 +1476,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 's':
                 {
-#if 0
                         l_settings.m_show_stats = true;
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1709,9 +1484,7 @@ int main(int argc, char** argv)
                 // ---------------------------------------
                 case 'm':
                 {
-#if 0
                         l_settings.m_show_summary = true;
-#endif
                         break;
                 }
                 // ---------------------------------------
@@ -1983,7 +1756,6 @@ int main(int argc, char** argv)
                 }
         }
 
-#if 0
         if(l_settings.m_verbose)
         {
                 printf("Showing hostname list:\n");
@@ -1992,7 +1764,6 @@ int main(int argc, char** argv)
                         printf("%s\n", i_host->m_host.c_str());
                 }
         }
-#endif
 
         // -------------------------------------------
         // Sigint handler
@@ -2004,192 +1775,8 @@ int main(int argc, char** argv)
         }
 
         // -------------------------------------------
-        // create subrequests
-        // -------------------------------------------
-        ns_hlx::subr_list_t l_subr_list;
-        for(phurl_host_list_t::iterator i_host = l_host_list->begin();
-            i_host != l_host_list->end();
-            ++i_host)
-        {
-                ns_hlx::subr *i_subr = new ns_hlx::subr(*l_subr);
-                i_subr->set_uid(get_next_subr_uuid());
-                i_subr->set_host(i_host->m_host);
-                if(!i_host->m_hostname.empty())
-                {
-                        i_subr->set_hostname(i_host->m_hostname);
-                }
-                if(!i_host->m_id.empty())
-                {
-                        i_subr->set_id(i_host->m_id);
-                }
-                if(!i_host->m_where.empty())
-                {
-                        i_subr->set_where(i_host->m_where);
-                }
-                if(i_host->m_port != 0)
-                {
-                        i_subr->set_port(i_host->m_port);
-                }
-                i_subr->reset_label();
-#if 0
-                l_subr->set_data(a_phr);
-
-                // Add to pending map
-                a_phr->m_pending_subr_uid_map[l_subr->get_uid()] = l_subr;
-
-                int32_t l_status = 0;
-                l_status = add_subr_t_srvr(a_t_srvr, *l_subr);
-                if(l_status != HLX_STATUS_OK)
-                {
-                        //("Error: performing add_subreq.\n");
-                        return HLX_STATUS_ERROR;
-                }
-#endif
-                l_subr_list.push_back(i_subr);
-        }
-
-        // -------------------------------------------
-        // resolve
-        // -------------------------------------------
-        printf("Resolving %lu addresses\n", l_host_list->size());
-        ns_hlx::nresolver l_resolver;
-
-#if 0
-        // Init resolver with cache
-        int32_t l_s;
-        l_s = m_nresolver->init(m_dns_use_ai_cache, m_dns_ai_cache_file);
-        if(HLX_STATUS_OK != l_s)
-        {
-                NDBG_PRINT("Error performing resolver init with ai_cache: %s\n",
-                           m_dns_ai_cache_file.c_str());
-                return HLX_STATUS_ERROR;
-        }
-#endif
-
-        uint64_t l_num = 0;
-        uint64_t l_len = l_subr_list.size();
-        for(ns_hlx::subr_list_t::iterator i_s = l_subr_list.begin();
-            i_s != l_subr_list.end() && !g_test_finished;
-            ++i_s)
-        {
-                ++l_num;
-                printf("Resolving: %12lu / %12lu\n", l_num, l_len);
-                // Try fast
-                ns_hlx::host_info l_host_info;
-                l_s = l_resolver.lookup_tryfast((*i_s)->get_host(),
-                                                (*i_s)->get_port(),
-                                                 l_host_info);
-                if(l_s != HLX_STATUS_OK)
-                {
-
-#if 0
-#ifndef ASYNC_DNS_SUPPORT
-#define ASYNC_DNS_SUPPORT 1
-#endif
-#ifdef ASYNC_DNS_SUPPORT
-                        if(!m_t_conf->m_srvr->get_dns_use_sync())
-                        {
-                                // TODO check !NULL
-                                // If try fast fails lookup async
-                                if(!m_adns_ctx)
-                                {
-                                        m_adns_ctx = l_nresolver->get_new_adns_ctx(m_evr_loop, adns_resolved_cb);
-                                        if(!m_adns_ctx)
-                                        {
-                                                TRC_ERROR("performing get_new_adns_ctx\n");
-                                                return HLX_STATUS_ERROR;
-                                        }
-                                }
-                                //m_stat.m_subr_pending_resolv_map[a_subr.get_label()] = &a_subr;
-                                ++(m_stat.m_dns_resolve_req);
-                                //NDBG_PRINT("%sl_subr label%s: %s --HOST: %s\n", ANSI_COLOR_BG_RED, ANSI_COLOR_OFF, a_subr.get_label().c_str(), a_subr.get_host().c_str());
-                                void *l_job_handle = NULL;
-                                l_status = l_nresolver->lookup_async(m_adns_ctx,
-                                                                     a_subr.get_host(),
-                                                                     a_subr.get_port(),
-                                                                     &a_subr,
-                                                                     &l_job_handle);
-                                if(l_status != HLX_STATUS_OK)
-                                {
-                                        return HLX_STATUS_ERROR;
-                                }
-                                if(l_job_handle)
-                                {
-                                        a_subr.set_lookup_job(l_job_handle);
-                                }
-                                return STATUS_QUEUED_ASYNC_DNS;
-                        }
-                        else
-                        {
-#endif
-#endif
-                        // sync dns
-                        l_s = l_resolver.lookup_sync((*i_s)->get_host(), (*i_s)->get_port(), l_host_info);
-                        if(l_s != HLX_STATUS_OK)
-                        {
-                                //NDBG_PRINT("Error: performing lookup_sync\n");
-                                //++m_stat.m_upsv_errors;
-                                //subr::error_cb_t l_error_cb = a_subr.get_error_cb();
-                                //if(l_error_cb)
-                                //{
-                                //        l_error_cb(a_subr, NULL, HTTP_STATUS_BAD_GATEWAY, "address lookup failure");
-                                //        // TODO check status
-                                //}
-                                //return HLX_STATUS_ERROR;
-                        }
-                        else
-                        {
-                                //++(m_stat.m_dns_resolved);
-                        }
-#if 0
-#ifdef ASYNC_DNS_SUPPORT
-                        }
-#endif
-#endif
-                }
-        }
-        printf("Done Resolving %lu addresses\n", l_host_list->size());
-
-        // -------------------------------------------
-        // Init
-        // -------------------------------------------
-#if 0
-        for(uint32_t i_t = 0; i_t < g_num_threads; ++i_t)
-        {
-                // Calculate num to request
-                int32_t l_num_to_request = -1;
-                if(g_num_to_request > 0)
-                {
-                        // first thread gets remainder
-                        l_num_to_request = g_num_to_request / g_num_threads;
-                        if(i_t == 0)
-                        {
-                                l_num_to_request += g_num_to_request % g_num_threads;
-                        }
-                }
-                t_hurl *l_t_hurl = new t_hurl(*l_subr, g_num_parallel, l_num_to_request);
-                g_t_hurl_list.push_back(l_t_hurl);
-                l_t_hurl->init();
-                // TODO Check status
-        }
-#endif
-
-        // -------------------------------------------
-        // Run
-        // -------------------------------------------
-        //g_start_time_ms = ns_hlx::get_time_ms();;
-        for(t_phurl_list_t::iterator i_t = g_t_phurl_list.begin();
-            i_t != g_t_phurl_list.end();
-            ++i_t)
-        {
-                (*i_t)->run();
-                // TODO Check status
-        }
-
-        // -------------------------------------------
         // Setup to run -but don't start
         // -------------------------------------------
-#if 0
         int32_t l_status = 0;
         l_status = l_srvr->init_run();
         if(HLX_STATUS_OK != l_status)
@@ -2197,7 +1784,6 @@ int main(int argc, char** argv)
                 printf("Error: performing hlx::init_run\n");
                 return -1;
         }
-#endif
 
 #ifdef ENABLE_PROFILER
         // Start Profiler
@@ -2209,8 +1795,22 @@ int main(int argc, char** argv)
         // -------------------------------------------
         // Run command exec
         // -------------------------------------------
-        command_exec();
-        // TODO Check status...
+        if(l_cli)
+        {
+                l_status = command_exec_cli(l_settings);
+                if(l_status != 0)
+                {
+                        return -1;
+                }
+        }
+        else
+        {
+                l_status = command_exec(l_settings, true);
+                if(l_status != 0)
+                {
+                        return -1;
+                }
+        }
 
 #ifdef ENABLE_PROFILER
         if (!l_gprof_file.empty())
@@ -2224,7 +1824,6 @@ int main(int argc, char** argv)
         // -------------------------------------------
         // Results...
         // -------------------------------------------
-#if 0
         if(!g_cancelled && !l_settings.m_quiet)
         {
                 bool l_use_color = l_settings.m_color;
@@ -2270,17 +1869,14 @@ int main(int argc, char** argv)
                         }
                 }
         }
-#endif
 
         // -------------------------------------------
         // Summary...
         // -------------------------------------------
-#if 0
         if(l_settings.m_show_summary)
         {
                 display_summary(l_settings, l_host_list->size());
         }
-#endif
 
         // -------------------------------------------
         // Cleanup...
@@ -2291,13 +1887,11 @@ int main(int argc, char** argv)
                 l_host_list = NULL;
         }
 
-#if 0
         if(l_broadcast_h)
         {
                 delete l_broadcast_h;
                 l_broadcast_h = NULL;
         }
-#endif
 
         // TODO Fix deallocation
 #if 0
@@ -2313,13 +1907,11 @@ int main(int argc, char** argv)
         }
 #endif
 
-#if 0
         if(l_srvr)
         {
                 delete l_srvr;
                 l_srvr = NULL;
         }
-#endif
 
         return 0;
 }
@@ -2329,14 +1921,13 @@ int main(int argc, char** argv)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-void display_summary(void)
+void display_summary(settings_struct_t &a_settings, uint32_t a_num_hosts)
 {
         std::string l_header_str = "";
         std::string l_protocol_str = "";
         std::string l_cipher_str = "";
         std::string l_off_color = "";
 
-#if 0
         if(a_settings.m_color)
         {
                 l_header_str = ANSI_COLOR_FG_CYAN;
@@ -2375,7 +1966,6 @@ void display_summary(void)
         l_sorted_map[i_s->second] = i_s->first;
         for(_sorted_map_t::reverse_iterator i_s = l_sorted_map.rbegin(); i_s != l_sorted_map.rend(); ++i_s)
         printf("| %-32s %u\n", i_s->second.c_str(), i_s->first);
-#endif
 }
 
 //: ----------------------------------------------------------------------------
@@ -2383,9 +1973,8 @@ void display_summary(void)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-void display_status_line(void)
+void display_status_line(settings_struct_t &a_settings)
 {
-#if 0
         // -------------------------------------------------
         // Get results from clients
         // -------------------------------------------------
@@ -2418,7 +2007,6 @@ void display_status_line(void)
                 printf("Done: %8u Reqd: %8u Rslvd: %8u Rslv_Actv: %8u Rslv_Req %8u Total: %8u Error: %8u\n",
                                 l_num_done, l_num_get, l_num_resolved, l_num_resolve_active, l_num_resolve_req, l_num_rx, l_num_error);
         }
-#endif
 }
 
 //: ----------------------------------------------------------------------------
@@ -2482,10 +2070,14 @@ int32_t read_file(const char *a_file, char **a_buf, uint32_t *a_len)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-std::string dump_all_responses_line_dl(void)
+std::string dump_all_responses_line_dl(settings_struct_t &a_settings,
+                                       phurl_h_resp_list_t &a_resp_list,
+                                       bool a_color,
+                                       bool a_pretty,
+                                       int a_part_map)
 {
+
         std::string l_responses_str = "";
-#if 0
         std::string l_host_color = "";
         std::string l_server_color = "";
         std::string l_id_color = "";
@@ -2623,7 +2215,6 @@ std::string dump_all_responses_line_dl(void)
                         ARESP("\n");
                 }
         }
-#endif
         return l_responses_str;
 }
 
@@ -2637,9 +2228,10 @@ l_obj.AddMember(_key,\
                 rapidjson::Value(_val, l_js_allocator).Move(),\
                 l_js_allocator)
 
-std::string dump_all_responses_json(void)
+std::string dump_all_responses_json(settings_struct_t &a_settings,
+                                    phurl_h_resp_list_t &a_resp_list,
+                                    int a_part_map)
 {
-#if 0
         rapidjson::Document l_js_doc;
         l_js_doc.SetObject();
         rapidjson::Value l_js_array(rapidjson::kArrayType);
@@ -2807,9 +2399,6 @@ std::string dump_all_responses_json(void)
 
         //NDBG_PRINT("Document: \n%s\n", l_strbuf.GetString());
         std::string l_responses_str = l_strbuf.GetString();
-#else
-        std::string l_responses_str = "";
-#endif
         return l_responses_str;
 }
 
@@ -2818,11 +2407,12 @@ std::string dump_all_responses_json(void)
 //: \return:  TODO
 //: \param:   TODO
 //: ----------------------------------------------------------------------------
-std::string dump_all_responses(output_type_t a_output_type,
-                               int a_part_map)
+std::string dump_all_responses(settings_struct_t &a_settings,
+                               phurl_h_resp_list_t &a_resp_list,
+                               bool a_color, bool a_pretty,
+                               output_type_t a_output_type, int a_part_map)
 {
         std::string l_responses_str = "";
-#if 0
         switch(a_output_type)
         {
         case OUTPUT_LINE_DELIMITED:
@@ -2840,6 +2430,5 @@ std::string dump_all_responses(output_type_t a_output_type,
                 break;
         }
         }
-#endif
         return l_responses_str;
 }
